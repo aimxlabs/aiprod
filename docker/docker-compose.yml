@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  aiprod:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8600:8600"   # HTTP API
+      - "2525:2525"   # SMTP
+      - "1993:1993"   # IMAP (future)
+    volumes:
+      - aiprod-data:/data
+    environment:
+      - AIPROD_DATA_DIR=/data
+      - AIPROD_DOMAIN=${AIPROD_DOMAIN:-localhost}
+      - AIPROD_HTTP_ADDR=:8600
+      - AIPROD_SMTP_ADDR=:2525
+      - AIPROD_NO_AUTH=${AIPROD_NO_AUTH:-0}
+    restart: unless-stopped
+    command: ["serve"]
+
+volumes:
+  aiprod-data:

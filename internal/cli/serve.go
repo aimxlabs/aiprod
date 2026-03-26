@@ -1,0 +1,212 @@
+package cli
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/garett/aiprod/internal/agents"
+	"github.com/garett/aiprod/internal/api"
+	"github.com/garett/aiprod/internal/auth"
+	"github.com/garett/aiprod/internal/db"
+	"github.com/garett/aiprod/internal/docs"
+	"github.com/garett/aiprod/internal/email"
+	"github.com/garett/aiprod/internal/governor"
+	"github.com/garett/aiprod/internal/knowledge"
+	"github.com/garett/aiprod/internal/llm"
+	"github.com/garett/aiprod/internal/memory"
+	"github.com/garett/aiprod/internal/observe"
+	"github.com/garett/aiprod/internal/planner"
+	"github.com/garett/aiprod/internal/search"
+	"github.com/garett/aiprod/internal/storage"
+	"github.com/garett/aiprod/internal/tables"
+	"github.com/garett/aiprod/internal/taskgraph"
+	"github.com/garett/aiprod/internal/tasks"
+	"github.com/garett/aiprod/internal/tools"
+	"github.com/go-chi/chi/v5"
+	"github.com/spf13/cobra"
+)
+
+func newServeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "serve",
+		Short: "Start the API server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := cfg.EnsureDirectories(); err != nil {
+				return err
+			}
+
+			// Open auth store (core.db)
+			authStore, err := auth.NewStore(cfg.CoreDBPath())
+			if err != nil {
+				return fmt.Errorf("opening auth store: %w", err)
+			}
+			defer authStore.Close()
+			coreDB := authStore.DB()
+
+			// Initialize module stores
+			fileStore, err := storage.NewStore(coreDB, cfg.FilesDir())
+			if err != nil {
+				return fmt.Errorf("opening file store: %w", err)
+			}
+
+			docStore, err := docs.NewStore(coreDB, cfg.DocsDir())
+			if err != nil {
+				return fmt.Errorf("opening docs store: %w", err)
+			}
+
+			tableStore, err := tables.NewStore(coreDB, cfg.TablesDBPath())
+			if err != nil {
+				return fmt.Errorf("opening tables store: %w", err)
+			}
+			defer tableStore.Close()
+
+			taskStore, err := tasks.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening tasks store: %w", err)
+			}
+
+			// Email uses its own database
+			emailDB, err := db.Open(cfg.EmailDBPath())
+			if err != nil {
+				return fmt.Errorf("opening email db: %w", err)
+			}
+			defer emailDB.Close()
+
+			emailStore, err := email.NewStore(emailDB, cfg.EmailRawDir())
+			if err != nil {
+				return fmt.Errorf("opening email store: %w", err)
+			}
+			emailClient := email.NewSMTPClient(emailStore, cfg.Domain)
+			smtpServer := email.NewSMTPServer(emailStore, cfg.Domain, cfg.SMTPAddr)
+
+			// Cognitive layer: memory, tools, governor, planner, taskgraph, agents, knowledge (core.db)
+			memoryStore, err := memory.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening memory store: %w", err)
+			}
+
+			toolsStore, err := tools.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening tools store: %w", err)
+			}
+
+			governorStore, err := governor.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening governor store: %w", err)
+			}
+
+			plannerStore, err := planner.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening planner store: %w", err)
+			}
+
+			taskgraphStore, err := taskgraph.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening taskgraph store: %w", err)
+			}
+
+			agentsStore, err := agents.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening agents store: %w", err)
+			}
+
+			knowledgeStore, err := knowledge.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening knowledge store: %w", err)
+			}
+
+			// Observe uses its own database (high write volume)
+			observeDB, err := db.Open(cfg.ObserveDBPath())
+			if err != nil {
+				return fmt.Errorf("opening observe db: %w", err)
+			}
+			defer observeDB.Close()
+
+			observeStore, err := observe.NewStore(observeDB)
+			if err != nil {
+				return fmt.Errorf("opening observe store: %w", err)
+			}
+
+			// Local LLM via Ollama
+			llmClient := llm.NewClient()
+			llmConfigStore, err := llm.NewConfigStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening llm config store: %w", err)
+			}
+			if err := llmClient.Ping(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: Ollama not available (%v) — /llm endpoints will return errors\n", err)
+			} else {
+				fmt.Printf("  LLM:      %s (%s)\n", llmClient.Model, llmClient.BaseURL)
+			}
+
+			// Unified search
+			searchSvc := search.NewService(docStore, emailStore)
+
+			// Create API server and register all routes
+			srv := api.NewServer(authStore, cfg.NoAuth)
+			srv.SetupV1Routes(func(r chi.Router) {
+				// Core modules
+				srv.RegisterFilesRoutes(r, fileStore)
+				srv.RegisterDocsRoutes(r, docStore)
+				srv.RegisterTablesRoutes(r, tableStore)
+				srv.RegisterTasksRoutes(r, taskStore)
+				srv.RegisterEmailRoutes(r, emailStore, emailClient)
+				srv.RegisterSearchRoutes(r, searchSvc)
+				// Cognitive layer
+				srv.RegisterMemoryRoutes(r, memoryStore)
+				srv.RegisterObserveRoutes(r, observeStore)
+				srv.RegisterToolsRoutes(r, toolsStore)
+				srv.RegisterGovernorRoutes(r, governorStore)
+				srv.RegisterPlannerRoutes(r, plannerStore)
+				srv.RegisterTaskGraphRoutes(r, taskgraphStore)
+				srv.RegisterAgentsRoutes(r, agentsStore)
+				srv.RegisterKnowledgeRoutes(r, knowledgeStore)
+				// LLM-powered endpoints
+				srv.RegisterLLMRoutes(r, &api.LLMStores{
+					LLM:       llmClient,
+					Config:    llmConfigStore,
+					Memory:    memoryStore,
+					Observe:   observeStore,
+					Knowledge: knowledgeStore,
+					Planner:   plannerStore,
+				})
+			})
+
+			// Start SMTP server
+			go func() {
+				if err := smtpServer.ListenAndServe(); err != nil {
+					fmt.Fprintf(os.Stderr, "SMTP server error: %v\n", err)
+				}
+			}()
+
+			// Start outbound queue processor
+			queueStop := make(chan struct{})
+			go emailClient.StartQueueProcessor(queueStop)
+
+			fmt.Printf("aiprod serving:\n")
+			fmt.Printf("  HTTP API: %s\n", cfg.HTTPAddr)
+			fmt.Printf("  SMTP:     %s\n", cfg.SMTPAddr)
+			fmt.Printf("  Domain:   %s\n", cfg.Domain)
+			fmt.Printf("  Auth:     %v\n", !cfg.NoAuth)
+
+			go func() {
+				if err := http.ListenAndServe(cfg.HTTPAddr, srv.Router); err != nil && err != http.ErrServerClosed {
+					fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
+					os.Exit(1)
+				}
+			}()
+
+			// Wait for interrupt
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+			<-quit
+			fmt.Println("\nShutting down...")
+			close(queueStop)
+			smtpServer.Close()
+			return nil
+		},
+	}
+}
