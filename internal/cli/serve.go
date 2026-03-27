@@ -25,6 +25,7 @@ import (
 	"github.com/garett/aiprod/internal/taskgraph"
 	"github.com/garett/aiprod/internal/tasks"
 	"github.com/garett/aiprod/internal/tools"
+	"github.com/garett/aiprod/internal/webhooks"
 	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
 )
@@ -79,8 +80,29 @@ func newServeCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("opening email store: %w", err)
 			}
-			emailClient := email.NewSMTPClient(emailStore, cfg.Domain)
-			smtpServer := email.NewSMTPServer(emailStore, cfg.Domain, cfg.SMTPAddr)
+
+			// Email: use mailr relay if configured, otherwise standalone SMTP
+			var emailSender email.Sender
+			var smtpServer *email.SMTPServer
+			var mailrClient *email.MailrClient
+			mailrURL := os.Getenv("AIPROD_MAILR_URL")
+			if mailrURL != "" {
+				mailrClient = email.NewMailrClient(
+					emailStore,
+					mailrURL,
+					os.Getenv("AIPROD_MAILR_DOMAIN_ID"),
+					os.Getenv("AIPROD_MAILR_AUTH_TOKEN"),
+				)
+				emailSender = mailrClient
+			} else {
+				emailClient := email.NewSMTPClient(emailStore, cfg.Domain)
+				smtpServer = email.NewSMTPServer(emailStore, cfg.Domain, cfg.SMTPAddr)
+				emailSender = emailClient
+				// Start outbound queue processor for standalone mode
+				queueStop := make(chan struct{})
+				go emailClient.StartQueueProcessor(queueStop)
+				defer close(queueStop)
+			}
 
 			// Cognitive layer: memory, tools, governor, planner, taskgraph, agents, knowledge (core.db)
 			memoryStore, err := memory.NewStore(coreDB)
@@ -118,6 +140,11 @@ func newServeCmd() *cobra.Command {
 				return fmt.Errorf("opening knowledge store: %w", err)
 			}
 
+			webhooksStore, err := webhooks.NewStore(coreDB)
+			if err != nil {
+				return fmt.Errorf("opening webhooks store: %w", err)
+			}
+
 			// Observe uses its own database (high write volume)
 			observeDB, err := db.Open(cfg.ObserveDBPath())
 			if err != nil {
@@ -153,7 +180,7 @@ func newServeCmd() *cobra.Command {
 				srv.RegisterDocsRoutes(r, docStore)
 				srv.RegisterTablesRoutes(r, tableStore)
 				srv.RegisterTasksRoutes(r, taskStore)
-				srv.RegisterEmailRoutes(r, emailStore, emailClient)
+				srv.RegisterEmailRoutes(r, emailStore, emailSender)
 				srv.RegisterSearchRoutes(r, searchSvc)
 				// Cognitive layer
 				srv.RegisterMemoryRoutes(r, memoryStore)
@@ -164,6 +191,7 @@ func newServeCmd() *cobra.Command {
 				srv.RegisterTaskGraphRoutes(r, taskgraphStore)
 				srv.RegisterAgentsRoutes(r, agentsStore)
 				srv.RegisterKnowledgeRoutes(r, knowledgeStore)
+				srv.RegisterWebhooksRoutes(r, webhooksStore)
 				// LLM-powered endpoints
 				srv.RegisterLLMRoutes(r, &api.LLMStores{
 					LLM:       llmClient,
@@ -175,20 +203,27 @@ func newServeCmd() *cobra.Command {
 				})
 			})
 
-			// Start SMTP server
-			go func() {
-				if err := smtpServer.ListenAndServe(); err != nil {
-					fmt.Fprintf(os.Stderr, "SMTP server error: %v\n", err)
-				}
-			}()
+			// Start webhook listeners for active subscriptions
+			webhooksStore.StartAllListeners()
 
-			// Start outbound queue processor
-			queueStop := make(chan struct{})
-			go emailClient.StartQueueProcessor(queueStop)
+			// Start email services
+			mailrStop := make(chan struct{})
+			if mailrClient != nil {
+				go mailrClient.StartPollProcessor(mailrStop)
+				fmt.Printf("  Email:    mailr relay (%s)\n", mailrURL)
+			} else if smtpServer != nil {
+				go func() {
+					if err := smtpServer.ListenAndServe(); err != nil {
+						fmt.Fprintf(os.Stderr, "SMTP server error: %v\n", err)
+					}
+				}()
+			}
 
 			fmt.Printf("aiprod serving:\n")
 			fmt.Printf("  HTTP API: %s\n", cfg.HTTPAddr)
-			fmt.Printf("  SMTP:     %s\n", cfg.SMTPAddr)
+			if smtpServer != nil {
+				fmt.Printf("  SMTP:     %s\n", cfg.SMTPAddr)
+			}
 			fmt.Printf("  Domain:   %s\n", cfg.Domain)
 			fmt.Printf("  Auth:     %v\n", !cfg.NoAuth)
 
@@ -204,8 +239,11 @@ func newServeCmd() *cobra.Command {
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 			<-quit
 			fmt.Println("\nShutting down...")
-			close(queueStop)
-			smtpServer.Close()
+			webhooksStore.StopAllListeners()
+			close(mailrStop)
+			if smtpServer != nil {
+				smtpServer.Close()
+			}
 			return nil
 		},
 	}

@@ -29,7 +29,7 @@ Most productivity tools are designed for humans clicking buttons. aiprod is desi
 
 | Module | What It Does |
 |--------|-------------|
-| **Email** | Full SMTP server (inbound + outbound), threading, labels, full-text search |
+| **Email** | Full email with threading, labels, full-text search. Standalone SMTP or [mailr](https://github.com/aimxlabs/mailr) relay for production |
 | **Documents** | Markdown docs with version history, stored on the filesystem |
 | **Tables** | Dynamic SQLite tables — create schemas on the fly, import CSV, run SQL |
 | **Files** | Content-addressed storage with SHA-256 deduplication |
@@ -115,6 +115,9 @@ All configuration is via environment variables.
 | `AIPROD_TLS_KEY` | — | Path to TLS private key |
 | `AIPROD_OLLAMA_URL` | `http://localhost:11434` | Ollama API URL |
 | `AIPROD_OLLAMA_MODEL` | `qwen2:7b` | Default LLM model |
+| `AIPROD_MAILR_URL` | — | mailr relay URL (enables relay mode) |
+| `AIPROD_MAILR_DOMAIN_ID` | — | mailr domain ID |
+| `AIPROD_MAILR_AUTH_TOKEN` | — | mailr domain auth token |
 
 ---
 
@@ -491,6 +494,40 @@ All endpoints are under `/api/v1/`. Responses use the envelope `{"ok": true, "da
 
 ---
 
+## Email: Standalone vs Relay Mode
+
+aiprod's email system runs in one of two modes:
+
+### Standalone (default)
+
+aiprod runs its own SMTP server and delivers outbound email directly via MX lookup. Good for local development and testing, but **not production-ready** — no DKIM signing, no SPF, no sender reputation.
+
+```bash
+./aiprod serve   # SMTP on :2525, direct MX delivery
+```
+
+### Relay Mode (production)
+
+Set `AIPROD_MAILR_URL` to route email through a [mailr](https://github.com/aimxlabs/mailr) relay server. mailr handles the hard parts — inbound SMTP on port 25, outbound MX delivery with DKIM signing, retry queues, and DNS configuration. aiprod polls mailr for inbound messages and sends outbound via mailr's API.
+
+```bash
+AIPROD_MAILR_URL=https://mail.example.com \
+AIPROD_MAILR_DOMAIN_ID=dom_abc123 \
+AIPROD_MAILR_AUTH_TOKEN=tok_xyz789 \
+./aiprod serve
+```
+
+In relay mode:
+- aiprod's local SMTP server is disabled
+- Outbound email is submitted to mailr's `/api/domains/:id/send` endpoint
+- Inbound email is polled from mailr every 15 seconds
+- Messages are stored locally in aiprod's `email.db` for threading, search, and labels
+- The existing `/api/v1/email/*` endpoints work identically in both modes
+
+Deploy mailr with one command using the `/deploy-mailr` skill in the [mailr repo](https://github.com/aimxlabs/mailr).
+
+---
+
 ## Architecture
 
 ```
@@ -510,25 +547,29 @@ All endpoints are under `/api/v1/`. Responses use the envelope `{"ok": true, "da
     +---------+---------+   +---------+---------+
     |   Core Suite      |   |  Cognitive Layer  |
     |                   |   |                   |
-    | Email (SMTP)      |   | Memory            |
+    | Email (SMTP/mailr)|   | Memory            |
     | Documents (MD)    |   | Observe (traces)  |
     | Tables (SQL)      |   | Tools (registry)  |
     | Files (SHA-256)   |   | Governor (budgets)|
     | Tasks (FSM)       |   | Planner (plans)   |
     | Auth (API keys)   |   | Task Graph (DAG)  |
     | Search (FTS5)     |   | Agents (messages) |
-    |                   |   | Knowledge (graph) |
+    | Webhooks (hookd)  |   | Knowledge (graph) |
     +---------+---------+   | LLM (Ollama)      |
               |             +---------+---------+
     +---------+---+---------+---------+
     |             |         |         |
  core.db     email.db  tables.db  observe.db
  (SQLite)    (SQLite)  (SQLite)   (SQLite)
+              |                       |
+         [optional]              [optional]
+          mailr                    hookd
+       (mail relay)          (webhook relay)
 ```
 
 **Tech stack:** Go, SQLite (pure Go via modernc.org), chi router, cobra CLI, go-smtp, Ollama.
 
-**No external services required.** No Redis, no Postgres, no Kafka, no cloud APIs. Just a binary and a data directory.
+**Optional relay services:** [mailr](https://github.com/aimxlabs/mailr) for production email (DKIM, MX delivery), [hookd](https://github.com/aimxlabs/hookd) for webhook reception.
 
 ---
 

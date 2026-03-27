@@ -9,9 +9,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func (s *Server) RegisterEmailRoutes(r chi.Router, store *email.Store, client *email.SMTPClient) {
+func (s *Server) RegisterEmailRoutes(r chi.Router, store *email.Store, sender email.Sender) {
 	r.Route("/email", func(r chi.Router) {
-		r.Post("/send", s.handleEmailSend(client))
+		r.Post("/send", s.handleEmailSend(sender))
 		r.Get("/messages", s.handleEmailList(store))
 		r.Get("/messages/{id}", s.handleEmailGet(store))
 		r.Patch("/messages/{id}", s.handleEmailUpdate(store))
@@ -21,7 +21,7 @@ func (s *Server) RegisterEmailRoutes(r chi.Router, store *email.Store, client *e
 	})
 }
 
-func (s *Server) handleEmailSend(client *email.SMTPClient) http.HandlerFunc {
+func (s *Server) handleEmailSend(sender email.Sender) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			From    string   `json:"from"`
@@ -39,7 +39,7 @@ func (s *Server) handleEmailSend(client *email.SMTPClient) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "to is required")
 			return
 		}
-		msg, err := client.Send(req.From, req.To, req.Cc, req.Subject, req.Body, req.HTML)
+		msg, err := sender.Send(req.From, req.To, req.Cc, req.Subject, req.Body, req.HTML)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 			return
