@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/garett/aiprod/internal/agents"
 	"github.com/garett/aiprod/internal/api"
@@ -249,11 +250,46 @@ func newServeCmd() *cobra.Command {
 				}
 			}()
 
+			// Start nightly dream cycle (memory consolidation)
+			dreamStop := make(chan struct{})
+			if memoryStore != nil {
+				go func() {
+					// Calculate time until next 3 AM UTC
+					now := time.Now().UTC()
+					next3AM := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, time.UTC)
+					if now.After(next3AM) {
+						next3AM = next3AM.Add(24 * time.Hour)
+					}
+					delay := next3AM.Sub(now)
+					fmt.Printf("  Dream:    next cycle at %s (in %s)\n", next3AM.Format("15:04 UTC"), delay.Round(time.Minute))
+
+					timer := time.NewTimer(delay)
+					for {
+						select {
+						case <-dreamStop:
+							timer.Stop()
+							return
+						case <-timer.C:
+							fmt.Println("[dream] Nightly dream cycle starting...")
+							result, err := memoryStore.Dream()
+							if err != nil {
+								fmt.Printf("[dream] Error: %v\n", err)
+							} else {
+								fmt.Printf("[dream] Complete: %+v\n", *result)
+							}
+							// Schedule next run in 24 hours
+							timer.Reset(24 * time.Hour)
+						}
+					}
+				}()
+			}
+
 			// Wait for interrupt
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 			<-quit
 			fmt.Println("\nShutting down...")
+			close(dreamStop)
 			webhooksStore.StopAllListeners()
 			close(mailrStop)
 			if smtpServer != nil {

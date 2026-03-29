@@ -16,6 +16,7 @@ func (s *Server) RegisterMemoryRoutes(r chi.Router, store *memory.Store) {
 		r.Get("/{id}", s.handleMemoryGet(store))
 		r.Patch("/{id}", s.handleMemoryUpdate(store))
 		r.Delete("/{id}", s.handleMemoryDelete(store))
+		r.Post("/dream", s.handleDream(store))
 	})
 	r.Route("/scratchpad", func(r chi.Router) {
 		r.Post("/", s.handleScratchSet(store))
@@ -212,6 +213,17 @@ func (s *Server) handleCompressionList(store *memory.Store) http.HandlerFunc {
 		result, err := store.ListCompressions(r.URL.Query().Get("agent_id"), r.URL.Query().Get("source_type"), limit)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) handleDream(store *memory.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		result, err := store.Dream()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "DREAM_FAILED", err.Error())
 			return
 		}
 		WriteJSON(w, http.StatusOK, result)
