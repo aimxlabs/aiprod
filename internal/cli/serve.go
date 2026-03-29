@@ -164,9 +164,24 @@ func newServeCmd() *cobra.Command {
 				return fmt.Errorf("opening llm config store: %w", err)
 			}
 			if err := llmClient.Ping(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: Ollama not available (%v) — /llm endpoints will return errors\n", err)
+				fmt.Fprintf(os.Stderr, "Warning: Ollama not available (%v) — /llm endpoints will return errors, semantic search disabled\n", err)
 			} else {
 				fmt.Printf("  LLM:      %s (%s)\n", llmClient.Model, llmClient.BaseURL)
+
+				// Ensure embedding model is available (auto-pull on first run)
+				embModel := llmClient.EmbeddingModel()
+				if err := llmClient.EnsureModel(embModel); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Could not ensure embedding model %s: %v\n", embModel, err)
+				} else {
+					fmt.Printf("  Embeddings: %s\n", embModel)
+				}
+
+				// Ensure default LLM model is available too
+				if err := llmClient.EnsureModel(llmClient.Model); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Could not ensure LLM model %s: %v\n", llmClient.Model, err)
+				}
+
+				memoryStore.SetLLM(llmClient)
 			}
 
 			// Unified search
