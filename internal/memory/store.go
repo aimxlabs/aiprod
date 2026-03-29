@@ -82,9 +82,7 @@ var migrations = []string{
 	CREATE TABLE memories_fts_map (memory_id TEXT PRIMARY KEY, rowid INTEGER UNIQUE);
 
 	INSERT INTO memories_fts (agent_id, key, content, tags)
-		SELECT id, key, content, tags FROM memories;
-	INSERT INTO memories_fts_map (memory_id, rowid)
-		SELECT id, rowid FROM memories_fts;`,
+		SELECT agent_id, key, content, tags FROM memories;`,
 
 	// v3: add embedding column for semantic search
 	`ALTER TABLE memories ADD COLUMN embedding TEXT DEFAULT '';`,
