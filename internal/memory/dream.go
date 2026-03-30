@@ -453,21 +453,23 @@ func (s *Store) phaseReflect() (int, error) {
 
 	count := 0
 
-	// Step 1: Infer new knowledge from existing memories
-	inferPrompt := fmt.Sprintf(`You are analyzing an AI agent's memory store. Your job is to find implicit knowledge that can be inferred from what's already stored, WITHOUT asking the user anything.
+	// Step 1: Infer new factual knowledge from existing memories
+	inferPrompt := fmt.Sprintf(`You are analyzing an AI agent's memory store. Your job is to find implicit FACTUAL knowledge that can be inferred from what's already stored.
 
-Look at the memories below and derive new facts by:
-- Connecting dots between separate memories (e.g. if user asked about "restaurant payments" and also about "ReadyToPay", infer they might be in the restaurant tech industry)
-- Identifying patterns in behavior (e.g. if most questions come during certain topics, infer interests)
-- Extracting implicit preferences from how the user interacts (e.g. if they always ask for concise answers, infer they prefer brevity)
-- Noting domain expertise signals (e.g. technical vocabulary suggests engineering background)
+Focus on inferring:
+- Domain and industry context (e.g. if user asked about "restaurant payments" and "ReadyToPay", infer they work in restaurant tech)
+- Relationships between entities mentioned across different memories
+- The user's role and expertise level (e.g. technical vocabulary suggests engineering background)
+- Project context and goals that connect separate conversations
+- Communication style and preferences of the user (e.g. "uses casual tone", "prefers concise answers")
+
+These are facts ABOUT the user — store them as observations, not as instructions for the agent to copy.
 
 Current memories:
 %s
 
 For each inference, output a JSON line with: "namespace", "key", "content", "confidence" (0.0-1.0).
-Only include inferences you're reasonably confident about (>0.5).
-Do NOT suggest asking the user questions. Derive everything from existing data.
+Only include factual inferences you're reasonably confident about (>0.5).
 Output ONLY JSON lines, nothing else.`, dump.String())
 
 	inferResp, err := s.llm.Generate(
@@ -508,25 +510,35 @@ Output ONLY JSON lines, nothing else.`, dump.String())
 		}
 	}
 
-	// Step 2: Generate behavioral guidance (not "ask about X" but "when X comes up, do Y")
-	guidePrompt := fmt.Sprintf(`Based on this agent's memory store, generate behavioral guidance for future interactions.
+	// Step 2: Generate behavioral guidance that develops the agent's OWN personality
+	guidePrompt := fmt.Sprintf(`You are helping an AI agent develop its own authentic personality and interaction style. Review its memory store and generate guidance.
 
-Do NOT suggest asking the user questions or probing for information.
-Instead, generate guidance like:
-- "When discussing technology, prefer concrete examples over abstract explanations" (if user seems practical)
-- "The user likely values brevity — keep responses concise unless asked to elaborate"
-- "Show awareness of restaurant/payment industry context when relevant"
+CRITICAL DISTINCTION: Knowing about the user is NOT the same as copying the user.
+- "User uses casual tone with emojis" is a useful fact — but does NOT mean the agent should use emojis
+- "User prefers concise answers" means keep responses tight — that IS actionable
+- The agent should develop its OWN authentic voice, not mirror the user's personality
+- Never suggest asking the user questions or probing for information
 
-These should be natural behavioral adjustments, not interrogation strategies.
+Generate guidance in two categories:
+
+UNDERSTANDING THE USER (adapt to their needs, not their style):
+- How to match the user's expertise level (e.g. "User has deep technical knowledge — skip basic explanations")
+- What the user cares about (e.g. "User is focused on scalability — prioritize that in recommendations")
+- How the user prefers to receive information (e.g. "User values brevity — lead with the answer")
+
+AGENT PERSONALITY (develop your own character):
+- The agent should have its own distinct voice and opinions
+- Suggest traits that complement the user — if the user is casual, the agent might be warm but thorough; if the user moves fast, the agent might be the one who catches edge cases
+- The agent should feel like a knowledgeable colleague, not a mirror
 
 Current memories:
 %s
 
 Output 3-5 guidance statements as a plain text list, one per line starting with "- ".
-Be specific and actionable. Base everything on evidence from the memories.`, dump.String())
+Be specific and actionable.`, dump.String())
 
 	guideResp, err := s.llm.Generate(
-		"You are a behavioral analyst producing guidance for an AI assistant. Be specific, never suggest asking the user questions.",
+		"You are helping an AI develop its own personality. The agent should NOT mirror the user. Output guidance as a plain text list.",
 		guidePrompt, 0.3, 1024,
 	)
 	if err != nil {
