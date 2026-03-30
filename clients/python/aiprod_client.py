@@ -88,11 +88,20 @@ class AiprodClient:
         params = {"status": status} if status else None
         return self._get("/tasks", params=params)
 
-    def update_task(self, task_id, status=None, title=None):
+    def update_task(self, task_id, status=None, title=None, description=None, assignee=None, priority=None, due_date=None, tags=None):
+        # Status changes go through the transition endpoint (state machine)
+        if status:
+            self._post(f"/tasks/{task_id}/transition", {"status": status})
         data = {}
-        if status: data["status"] = status
         if title: data["title"] = title
-        return self._patch(f"/tasks/{task_id}", data)
+        if description: data["description"] = description
+        if assignee: data["assignee"] = assignee
+        if priority: data["priority"] = priority
+        if due_date: data["due_date"] = due_date
+        if tags is not None: data["tags"] = tags
+        if data:
+            return self._patch(f"/tasks/{task_id}", data)
+        return self._get(f"/tasks/{task_id}")
 
     # --- Knowledge ---
     def add_fact(self, subject, predicate, object_val, confidence=1.0):

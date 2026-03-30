@@ -365,6 +365,26 @@ func (s *Store) GetDependencies(taskID string) ([]Dependency, error) {
 	return deps, rows.Err()
 }
 
+func (s *Store) Delete(id string) error {
+	_, err := s.db.Exec("DELETE FROM task_events WHERE task_id = ?", id)
+	if err != nil {
+		return fmt.Errorf("deleting task events: %w", err)
+	}
+	_, err = s.db.Exec("DELETE FROM task_dependencies WHERE task_id = ? OR depends_on = ?", id, id)
+	if err != nil {
+		return fmt.Errorf("deleting task dependencies: %w", err)
+	}
+	res, err := s.db.Exec("DELETE FROM tasks WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("deleting task: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("task not found")
+	}
+	return nil
+}
+
 func (s *Store) addEvent(taskID, eventType, actor, oldVal, newVal, comment string) {
 	id := newID("evt_")
 	now := time.Now().UTC().Format(time.RFC3339)

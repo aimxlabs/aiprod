@@ -18,6 +18,7 @@ func (s *Server) RegisterTasksRoutes(r chi.Router, store *tasks.Store) {
 		r.Post("/{id}/transition", s.handleTaskTransition(store))
 		r.Post("/{id}/comment", s.handleTaskComment(store))
 		r.Get("/{id}/events", s.handleTaskEvents(store))
+		r.Delete("/{id}", s.handleTaskDelete(store))
 		r.Post("/{id}/dependencies", s.handleTaskAddDep(store))
 		r.Get("/{id}/dependencies", s.handleTaskGetDeps(store))
 	})
@@ -104,6 +105,24 @@ func (s *Server) handleTaskUpdate(store *tasks.Store) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
 			return
 		}
+		// Handle status changes via Transition so the state machine is enforced
+		if newStatus, ok := updates["status"].(string); ok && newStatus != "" {
+			delete(updates, "status")
+			t, err := store.Transition(id, GetAgentID(r), newStatus)
+			if err != nil {
+				WriteError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+				return
+			}
+			if t == nil {
+				WriteError(w, http.StatusNotFound, "NOT_FOUND", "Task not found")
+				return
+			}
+			// If there are remaining field updates, apply them too
+			if len(updates) == 0 {
+				WriteJSON(w, http.StatusOK, t)
+				return
+			}
+		}
 		t, err := store.Update(id, GetAgentID(r), updates)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
@@ -114,6 +133,21 @@ func (s *Server) handleTaskUpdate(store *tasks.Store) http.HandlerFunc {
 			return
 		}
 		WriteJSON(w, http.StatusOK, t)
+	}
+}
+
+func (s *Server) handleTaskDelete(store *tasks.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if err := store.Delete(id); err != nil {
+			if err.Error() == "task not found" {
+				WriteError(w, http.StatusNotFound, "NOT_FOUND", "Task not found")
+				return
+			}
+			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	}
 }
 

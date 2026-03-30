@@ -128,8 +128,42 @@ const TOOLS = [
             properties: {
                 title: { type: 'string', description: 'Task title' },
                 description: { type: 'string', description: 'Task details' },
+                assignee: { type: 'string', description: 'Agent or person to assign the task to' },
+                priority: { type: 'string', description: 'Priority: low, medium, high, critical' },
+                due_date: { type: 'string', description: 'Due date (RFC3339 or YYYY-MM-DD)' },
+                parent_id: { type: 'string', description: 'Parent task ID for subtasks' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'Tags for categorization' },
             },
             required: ['title'],
+        },
+    },
+    {
+        name: 'update_task',
+        description: 'Update a task\'s fields (title, description, assignee, priority, due_date, tags).',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                task_id: { type: 'string', description: 'Task ID to update' },
+                title: { type: 'string', description: 'New title' },
+                description: { type: 'string', description: 'New description' },
+                assignee: { type: 'string', description: 'New assignee' },
+                priority: { type: 'string', description: 'New priority: low, medium, high, critical' },
+                due_date: { type: 'string', description: 'New due date' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'New tags' },
+            },
+            required: ['task_id'],
+        },
+    },
+    {
+        name: 'transition_task',
+        description: 'Change a task\'s status. Valid transitions: open→in_progress/cancelled, in_progress→review/blocked/done/cancelled, blocked→in_progress/cancelled, review→in_progress/done/cancelled, done→open, cancelled→open.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                task_id: { type: 'string', description: 'Task ID' },
+                status: { type: 'string', description: 'New status: open, in_progress, blocked, review, done, cancelled' },
+            },
+            required: ['task_id', 'status'],
         },
     },
     {
@@ -195,8 +229,28 @@ async function executeTool(name, args) {
         }
 
         case 'create_task': {
-            const task = await post('/tasks', { title: args.title, description: args.description || '' });
+            const body = { title: args.title, description: args.description || '' };
+            if (args.assignee) body.assignee = args.assignee;
+            if (args.priority) body.priority = args.priority;
+            if (args.due_date) body.due_date = args.due_date;
+            if (args.parent_id) body.parent_id = args.parent_id;
+            if (args.tags) body.tags = args.tags;
+            const task = await post('/tasks', body);
             return `Task created: ${args.title} (id: ${task?.id || 'unknown'})`;
+        }
+
+        case 'update_task': {
+            const body = {};
+            for (const key of ['title', 'description', 'assignee', 'priority', 'due_date', 'tags']) {
+                if (args[key] !== undefined) body[key] = args[key];
+            }
+            const task = await patch(`/tasks/${args.task_id}`, body);
+            return `Task updated: ${args.task_id}`;
+        }
+
+        case 'transition_task': {
+            const task = await post(`/tasks/${args.task_id}/transition`, { status: args.status });
+            return `Task ${args.task_id} transitioned to ${args.status}`;
         }
 
         case 'list_tasks': {
