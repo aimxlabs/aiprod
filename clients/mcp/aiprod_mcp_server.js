@@ -31,7 +31,11 @@ function apiRequest(method, path, body) {
             res.on('end', () => {
                 try {
                     const json = JSON.parse(data);
-                    resolve(json.data);
+                    if (json.ok === false && json.error) {
+                        reject(new Error(json.error.message || json.error.code || 'API error'));
+                    } else {
+                        resolve(json.data);
+                    }
                 } catch(e) { resolve(data); }
             });
         });
@@ -236,7 +240,7 @@ async function executeTool(name, args) {
             if (args.parent_id) body.parent_id = args.parent_id;
             if (args.tags) body.tags = args.tags;
             const task = await post('/tasks', body);
-            return `Task created: ${args.title} (id: ${task?.id || 'unknown'})`;
+            return `Task created: ${args.title} (id: ${task?.id || 'unknown'}, status: ${task?.status || 'open'})`;
         }
 
         case 'update_task': {
@@ -245,12 +249,12 @@ async function executeTool(name, args) {
                 if (args[key] !== undefined) body[key] = args[key];
             }
             const task = await patch(`/tasks/${args.task_id}`, body);
-            return `Task updated: ${args.task_id}`;
+            return `Task ${args.task_id} updated (status: ${task?.status || 'unknown'})`;
         }
 
         case 'transition_task': {
             const task = await post(`/tasks/${args.task_id}/transition`, { status: args.status });
-            return `Task ${args.task_id} transitioned to ${args.status}`;
+            return `Task ${args.task_id} transitioned to ${task?.status || args.status} (was: ${args.status === task?.status ? 'confirmed' : 'check task'})`;
         }
 
         case 'list_tasks': {
