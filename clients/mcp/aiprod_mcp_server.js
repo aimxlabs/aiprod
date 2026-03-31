@@ -126,7 +126,7 @@ const TOOLS = [
     },
     {
         name: 'create_task',
-        description: 'Create a task to track work.',
+        description: 'Create a task to track work. Returns the task with its generated ID (e.g. task_a1b2c3...). Save this ID to use with transition_task and update_task.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -143,11 +143,11 @@ const TOOLS = [
     },
     {
         name: 'update_task',
-        description: 'Update a task\'s fields (title, description, assignee, priority, due_date, tags).',
+        description: 'Update a task\'s fields. The task_id must be an exact ID returned by create_task (e.g. task_a1b2c3...).',
         inputSchema: {
             type: 'object',
             properties: {
-                task_id: { type: 'string', description: 'Task ID to update' },
+                task_id: { type: 'string', description: 'Exact task ID from create_task (e.g. task_a1b2c3d4e5f6...)' },
                 title: { type: 'string', description: 'New title' },
                 description: { type: 'string', description: 'New description' },
                 assignee: { type: 'string', description: 'New assignee' },
@@ -160,11 +160,11 @@ const TOOLS = [
     },
     {
         name: 'transition_task',
-        description: 'Change a task\'s status. Valid transitions: open→in_progress/cancelled, in_progress→review/blocked/done/cancelled, blocked→in_progress/cancelled, review→in_progress/done/cancelled, done→open, cancelled→open.',
+        description: 'Change a task\'s status. The task_id must be the exact ID returned by create_task (e.g. task_a1b2c3...), NOT a made-up ID. Valid transitions: open→in_progress/cancelled, in_progress→review/blocked/done/cancelled, blocked→in_progress/cancelled, review→in_progress/done/cancelled, done→open, cancelled→open.',
         inputSchema: {
             type: 'object',
             properties: {
-                task_id: { type: 'string', description: 'Task ID' },
+                task_id: { type: 'string', description: 'Exact task ID from create_task (e.g. task_a1b2c3d4e5f6...). Must be a real ID, not a placeholder.' },
                 status: { type: 'string', description: 'New status: open, in_progress, blocked, review, done, cancelled' },
             },
             required: ['task_id', 'status'],
@@ -240,7 +240,8 @@ async function executeTool(name, args) {
             if (args.parent_id) body.parent_id = args.parent_id;
             if (args.tags) body.tags = args.tags;
             const task = await post('/tasks', body);
-            return `Task created: ${args.title} (id: ${task?.id || 'unknown'}, status: ${task?.status || 'open'})`;
+            const id = task?.id || 'unknown';
+            return `Task created.\n  task_id: ${id}\n  title: ${args.title}\n  status: ${task?.status || 'open'}\nUse this exact task_id (${id}) with transition_task to update status.`;
         }
 
         case 'update_task': {
