@@ -45,7 +45,7 @@ func (s *Server) handleTaskCreate(store *tasks.Store) http.HandlerFunc {
 			return
 		}
 		t, err := store.Create(req.Title, req.Description, req.Priority, req.Assignee,
-			GetAgentID(r), req.ParentID, req.DueDate, req.Tags, req.Metadata)
+			GetAgentID(r), GetAgentID(r), req.ParentID, req.DueDate, req.Tags, req.Metadata)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 			return
@@ -59,6 +59,7 @@ func (s *Server) handleTaskList(store *tasks.Store) http.HandlerFunc {
 		q := r.URL.Query()
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		result, err := store.List(tasks.ListOptions{
+			AgentID:  GetAgentID(r),
 			Status:   q.Get("status"),
 			Assignee: q.Get("assignee"),
 			Priority: q.Get("priority"),

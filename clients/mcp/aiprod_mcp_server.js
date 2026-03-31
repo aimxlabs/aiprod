@@ -9,6 +9,8 @@ const readline = require('readline');
 
 const AIPROD_URL = process.env.AIPROD_URL || 'http://agentkit-aiprod:8600';
 const AIPROD_KEY = process.env.AIPROD_API_KEY || '';
+const AGENT_ID = process.env.AGENT_ID || '';
+const SUB_AGENT_IDS = process.env.SUB_AGENT_IDS || '';
 
 // --- HTTP helpers ---
 function apiRequest(method, path, body) {
@@ -22,6 +24,8 @@ function apiRequest(method, path, body) {
             headers: {
                 'Content-Type': 'application/json',
                 ...(AIPROD_KEY ? { 'Authorization': `Bearer ${AIPROD_KEY}` } : {}),
+                ...(AGENT_ID ? { 'X-Agent-ID': AGENT_ID } : {}),
+                ...(SUB_AGENT_IDS ? { 'X-Sub-Agent-IDs': SUB_AGENT_IDS } : {}),
             },
             timeout: 30000,
         };
@@ -188,6 +192,19 @@ const TOOLS = [
             properties: {},
         },
     },
+    {
+        name: 'log_chat',
+        description: 'Log a chat message for daily review. Called automatically by the agent runtime.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                chat_id: { type: 'string', description: 'Conversation identifier' },
+                role: { type: 'string', description: 'user or assistant' },
+                content: { type: 'string', description: 'Message content' },
+            },
+            required: ['chat_id', 'role', 'content'],
+        },
+    },
 ];
 
 // --- Tool execution ---
@@ -268,6 +285,11 @@ async function executeTool(name, args) {
         case 'dream': {
             const result = await post('/memory/dream', {});
             return JSON.stringify(result, null, 2);
+        }
+
+        case 'log_chat': {
+            await post('/memory/chat-log', { chat_id: args.chat_id, role: args.role, content: args.content });
+            return 'Logged.';
         }
 
         default:

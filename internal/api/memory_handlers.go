@@ -17,6 +17,8 @@ func (s *Server) RegisterMemoryRoutes(r chi.Router, store *memory.Store) {
 		r.Patch("/{id}", s.handleMemoryUpdate(store))
 		r.Delete("/{id}", s.handleMemoryDelete(store))
 		r.Post("/dream", s.handleDream(store))
+		r.Post("/chat-log", s.handleChatLogCreate(store))
+		r.Get("/chat-log", s.handleChatLogList(store))
 	})
 	r.Route("/scratchpad", func(r chi.Router) {
 		r.Post("/", s.handleScratchSet(store))
@@ -38,7 +40,7 @@ func (s *Server) handleMemoryCreate(store *memory.Store) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
 			return
 		}
-		if m.AgentID == "" { m.AgentID = GetAgentID(r) }
+		m.AgentID = GetAgentID(r) // Always scope to authenticated agent
 		if m.Key == "" {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "key is required")
 			return
@@ -55,7 +57,7 @@ func (s *Server) handleMemoryCreate(store *memory.Store) http.HandlerFunc {
 func (s *Server) handleMemoryList(store *memory.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		opts := memory.MemoryListOpts{
-			AgentID:   r.URL.Query().Get("agent_id"),
+			AgentID:   GetAgentID(r), // Always scope to authenticated agent
 			Namespace: r.URL.Query().Get("namespace"),
 			SourceType: r.URL.Query().Get("source_type"),
 			Query:     r.URL.Query().Get("q"),
@@ -129,7 +131,7 @@ func (s *Server) handleScratchSet(store *memory.Store) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
 			return
 		}
-		if req.AgentID == "" { req.AgentID = GetAgentID(r) }
+		req.AgentID = GetAgentID(r) // Always scope to authenticated agent
 		if req.Key == "" {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "key is required")
 			return
@@ -145,7 +147,7 @@ func (s *Server) handleScratchSet(store *memory.Store) http.HandlerFunc {
 
 func (s *Server) handleScratchList(store *memory.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		result, err := store.ListScratch(r.URL.Query().Get("agent_id"), r.URL.Query().Get("session_id"))
+		result, err := store.ListScratch(GetAgentID(r), r.URL.Query().Get("session_id"))
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 			return
@@ -197,7 +199,7 @@ func (s *Server) handleCompressionCreate(store *memory.Store) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
 			return
 		}
-		if c.AgentID == "" { c.AgentID = GetAgentID(r) }
+		c.AgentID = GetAgentID(r) // Always scope to authenticated agent
 		result, err := store.CreateCompression(&c)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
@@ -210,7 +212,7 @@ func (s *Server) handleCompressionCreate(store *memory.Store) http.HandlerFunc {
 func (s *Server) handleCompressionList(store *memory.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		result, err := store.ListCompressions(r.URL.Query().Get("agent_id"), r.URL.Query().Get("source_type"), limit)
+		result, err := store.ListCompressions(GetAgentID(r), r.URL.Query().Get("source_type"), limit)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 			return
@@ -221,9 +223,46 @@ func (s *Server) handleCompressionList(store *memory.Store) http.HandlerFunc {
 
 func (s *Server) handleDream(store *memory.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		result, err := store.Dream()
+		agentID := GetAgentID(r)
+		result, err := store.Dream(agentID)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, "DREAM_FAILED", err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) handleChatLogCreate(store *memory.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ChatID  string `json:"chat_id"`
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
+			return
+		}
+		if req.ChatID == "" || req.Role == "" || req.Content == "" {
+			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "chat_id, role, and content are required")
+			return
+		}
+		cl, err := store.CreateChatLog(GetAgentID(r), req.ChatID, req.Role, req.Content)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusCreated, cl)
+	}
+}
+
+func (s *Server) handleChatLogList(store *memory.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		result, err := store.ListChatLogs(GetAgentID(r), r.URL.Query().Get("since"), limit)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "INTERNAL", err.Error())
 			return
 		}
 		WriteJSON(w, http.StatusOK, result)

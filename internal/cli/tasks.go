@@ -32,7 +32,7 @@ func newTasksCmd() *cobra.Command {
 			}
 			defer close()
 
-			t, err := store.Create(title, desc, priority, assignee, "agent:local", "", "", nil, nil)
+			t, err := store.Create(title, desc, priority, assignee, "agent:local", "agent:local", "", "", nil, nil)
 			if err != nil {
 				return err
 			}

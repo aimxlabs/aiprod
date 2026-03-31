@@ -9,15 +9,26 @@ import (
 type contextKey string
 
 const (
-	CtxAgentID contextKey = "agent_id"
-	CtxScopes  contextKey = "scopes"
+	CtxAgentID     contextKey = "agent_id"
+	CtxScopes      contextKey = "scopes"
+	CtxSubAgentIDs contextKey = "sub_agent_ids"
 )
 
 func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.NoAuth {
-			ctx := context.WithValue(r.Context(), CtxAgentID, "agent:local")
+			// In NoAuth mode, derive agent identity from X-Agent-ID header (set by AgentKit)
+			// or fall back to "agent:local" for direct API calls.
+			agentID := r.Header.Get("X-Agent-ID")
+			if agentID == "" {
+				agentID = "agent:local"
+			}
+			ctx := context.WithValue(r.Context(), CtxAgentID, agentID)
 			ctx = context.WithValue(ctx, CtxScopes, []string{"*"})
+			// Store sub-agent IDs for team scope queries (orchestrators only)
+			if subIDs := r.Header.Get("X-Sub-Agent-IDs"); subIDs != "" {
+				ctx = context.WithValue(ctx, CtxSubAgentIDs, strings.Split(subIDs, ","))
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -81,4 +92,19 @@ func GetAgentID(r *http.Request) string {
 func GetScopes(r *http.Request) []string {
 	v, _ := r.Context().Value(CtxScopes).([]string)
 	return v
+}
+
+// GetTeamAgentIDs returns the agent IDs for team-scoped queries.
+// Returns just the requesting agent's ID normally, or the agent + sub-agents
+// when ?scope=team is set and sub-agent IDs are available.
+func GetTeamAgentIDs(r *http.Request) []string {
+	agentID := GetAgentID(r)
+	if r.URL.Query().Get("scope") != "team" {
+		return []string{agentID}
+	}
+	ids := []string{agentID}
+	if subs, ok := r.Context().Value(CtxSubAgentIDs).([]string); ok {
+		ids = append(ids, subs...)
+	}
+	return ids
 }

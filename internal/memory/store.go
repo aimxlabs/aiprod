@@ -86,6 +86,28 @@ var migrations = []string{
 
 	// v3: add embedding column for semantic search
 	`ALTER TABLE memories ADD COLUMN embedding TEXT DEFAULT '';`,
+
+	// v4: chat logs for daily dream review
+	`CREATE TABLE IF NOT EXISTS chat_logs (
+		id         TEXT PRIMARY KEY,
+		agent_id   TEXT NOT NULL,
+		chat_id    TEXT NOT NULL,
+		role       TEXT NOT NULL,
+		content    TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_chatlog_agent ON chat_logs(agent_id, created_at);
+	CREATE INDEX IF NOT EXISTS idx_chatlog_chat ON chat_logs(agent_id, chat_id);`,
+}
+
+// ChatLog represents a single message in a conversation, persisted for dream review.
+type ChatLog struct {
+	ID        string `json:"id"`
+	AgentID   string `json:"agent_id"`
+	ChatID    string `json:"chat_id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
 }
 
 type Store struct {
@@ -699,4 +721,56 @@ func (s *Store) ListCompressions(agentID, sourceType string, limit int) ([]Compr
 		result = append(result, c)
 	}
 	return result, nil
+}
+
+// --- Chat Logs ---
+
+func (s *Store) CreateChatLog(agentID, chatID, role, content string) (*ChatLog, error) {
+	id := newID("cl_")
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		"INSERT INTO chat_logs (id, agent_id, chat_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		id, agentID, chatID, role, content, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating chat log: %w", err)
+	}
+	return &ChatLog{ID: id, AgentID: agentID, ChatID: chatID, Role: role, Content: content, CreatedAt: now}, nil
+}
+
+func (s *Store) ListChatLogs(agentID, since string, limit int) ([]ChatLog, error) {
+	query := "SELECT id, agent_id, chat_id, role, content, created_at FROM chat_logs WHERE agent_id = ?"
+	args := []interface{}{agentID}
+	if since != "" {
+		query += " AND created_at >= ?"
+		args = append(args, since)
+	}
+	query += " ORDER BY created_at ASC"
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	} else {
+		query += " LIMIT 500"
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("listing chat logs: %w", err)
+	}
+	defer rows.Close()
+	var result []ChatLog
+	for rows.Next() {
+		var cl ChatLog
+		if err := rows.Scan(&cl.ID, &cl.AgentID, &cl.ChatID, &cl.Role, &cl.Content, &cl.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, cl)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) DeleteChatLogsBefore(agentID, before string) (int64, error) {
+	res, err := s.db.Exec("DELETE FROM chat_logs WHERE agent_id = ? AND created_at < ?", agentID, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
