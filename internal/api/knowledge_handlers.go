@@ -41,7 +41,7 @@ func (s *Server) handleFactCreate(store *knowledge.Store) http.HandlerFunc {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
 			return
 		}
-		if f.AgentID == "" { f.AgentID = GetAgentID(r) }
+		f.AgentID = GetAgentID(r) // Always scope to authenticated agent
 		if f.Subject == "" || f.Predicate == "" || f.Object == "" {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "subject, predicate, and object are required")
 			return
@@ -58,7 +58,7 @@ func (s *Server) handleFactCreate(store *knowledge.Store) http.HandlerFunc {
 func (s *Server) handleFactList(store *knowledge.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		opts := knowledge.FactListOpts{
-			AgentID:   r.URL.Query().Get("agent_id"),
+			AgentID:   GetAgentID(r), // Always scope to authenticated agent
 			Subject:   r.URL.Query().Get("subject"),
 			Predicate: r.URL.Query().Get("predicate"),
 			Query:     r.URL.Query().Get("q"),

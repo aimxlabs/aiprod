@@ -49,6 +49,11 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 	CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
 	CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id);`,
+
+	// Migration 2: add agent_id column for per-agent scoping
+	`ALTER TABLE tasks ADD COLUMN agent_id TEXT DEFAULT '';
+	UPDATE tasks SET agent_id = created_by WHERE agent_id = '';
+	CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id);`,
 }
 
 var validStatuses = map[string]bool{
@@ -77,6 +82,7 @@ type Task struct {
 	Priority    string                 `json:"priority"`
 	Assignee    string                 `json:"assignee"`
 	CreatedBy   string                 `json:"created_by"`
+	AgentID     string                 `json:"agent_id"`
 	ParentID    string                 `json:"parent_id,omitempty"`
 	DueDate     string                 `json:"due_date,omitempty"`
 	Tags        []string               `json:"tags"`
@@ -115,7 +121,7 @@ func newID(prefix string) string {
 	return prefix + hex.EncodeToString(b)
 }
 
-func (s *Store) Create(title, description, priority, assignee, createdBy, parentID, dueDate string, tags []string, metadata map[string]interface{}) (*Task, error) {
+func (s *Store) Create(title, description, priority, assignee, createdBy, agentID, parentID, dueDate string, tags []string, metadata map[string]interface{}) (*Task, error) {
 	id := newID("task_")
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -132,10 +138,13 @@ func (s *Store) Create(title, description, priority, assignee, createdBy, parent
 	tagsJSON, _ := json.Marshal(tags)
 	metaJSON, _ := json.Marshal(metadata)
 
+	if agentID == "" {
+		agentID = createdBy
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO tasks (id, title, description, status, priority, assignee, created_by, parent_id, due_date, tags, metadata, created_at, modified_at)
-		 VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, title, description, priority, assignee, createdBy, parentID, dueDate,
+		`INSERT INTO tasks (id, title, description, status, priority, assignee, created_by, agent_id, parent_id, due_date, tags, metadata, created_at, modified_at)
+		 VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, title, description, priority, assignee, createdBy, agentID, parentID, dueDate,
 		string(tagsJSON), string(metaJSON), now, now,
 	)
 	if err != nil {
@@ -147,8 +156,8 @@ func (s *Store) Create(title, description, priority, assignee, createdBy, parent
 	return &Task{
 		ID: id, Title: title, Description: description, Status: "open",
 		Priority: priority, Assignee: assignee, CreatedBy: createdBy,
-		ParentID: parentID, DueDate: dueDate, Tags: tags, Metadata: metadata,
-		CreatedAt: now, ModifiedAt: now,
+		AgentID: agentID, ParentID: parentID, DueDate: dueDate,
+		Tags: tags, Metadata: metadata, CreatedAt: now, ModifiedAt: now,
 	}, nil
 }
 
@@ -156,10 +165,10 @@ func (s *Store) Get(id string) (*Task, error) {
 	t := &Task{}
 	var tagsJSON, metaJSON string
 	err := s.db.QueryRow(
-		`SELECT id, title, description, status, priority, assignee, created_by, parent_id, due_date, tags, metadata, created_at, modified_at
+		`SELECT id, title, description, status, priority, assignee, created_by, agent_id, parent_id, due_date, tags, metadata, created_at, modified_at
 		 FROM tasks WHERE id = ?`, id,
 	).Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority, &t.Assignee,
-		&t.CreatedBy, &t.ParentID, &t.DueDate, &tagsJSON, &metaJSON, &t.CreatedAt, &t.ModifiedAt)
+		&t.CreatedBy, &t.AgentID, &t.ParentID, &t.DueDate, &tagsJSON, &metaJSON, &t.CreatedAt, &t.ModifiedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -172,6 +181,7 @@ func (s *Store) Get(id string) (*Task, error) {
 }
 
 type ListOptions struct {
+	AgentID  string
 	Status   string
 	Assignee string
 	Priority string
@@ -182,9 +192,13 @@ type ListOptions struct {
 }
 
 func (s *Store) List(opts ListOptions) ([]Task, error) {
-	query := `SELECT id, title, description, status, priority, assignee, created_by, parent_id, due_date, tags, metadata, created_at, modified_at FROM tasks WHERE 1=1`
+	query := `SELECT id, title, description, status, priority, assignee, created_by, agent_id, parent_id, due_date, tags, metadata, created_at, modified_at FROM tasks WHERE 1=1`
 	var args []interface{}
 
+	if opts.AgentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, opts.AgentID)
+	}
 	if opts.Status != "" {
 		query += " AND status = ?"
 		args = append(args, opts.Status)
@@ -227,7 +241,7 @@ func (s *Store) List(opts ListOptions) ([]Task, error) {
 		var t Task
 		var tagsJSON, metaJSON string
 		if err := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority, &t.Assignee,
-			&t.CreatedBy, &t.ParentID, &t.DueDate, &tagsJSON, &metaJSON, &t.CreatedAt, &t.ModifiedAt); err != nil {
+			&t.CreatedBy, &t.AgentID, &t.ParentID, &t.DueDate, &tagsJSON, &metaJSON, &t.CreatedAt, &t.ModifiedAt); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(tagsJSON), &t.Tags)

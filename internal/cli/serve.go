@@ -270,14 +270,21 @@ func newServeCmd() *cobra.Command {
 							timer.Stop()
 							return
 						case <-timer.C:
-							fmt.Println("[dream] Nightly dream cycle starting...")
-							result, err := memoryStore.Dream()
+							fmt.Println("[dream] Nightly dream cycle starting (per-agent)...")
+							agentIDs, err := memoryStore.DistinctAgentIDs()
 							if err != nil {
-								fmt.Printf("[dream] Error: %v\n", err)
+								fmt.Printf("[dream] Error listing agents: %v\n", err)
 							} else {
-								fmt.Printf("[dream] Complete: %+v\n", *result)
+								for _, agentID := range agentIDs {
+									result, err := memoryStore.Dream(agentID)
+									if err != nil {
+										fmt.Printf("[dream] Error for %s: %v\n", agentID, err)
+									} else {
+										fmt.Printf("[dream] %s complete: expired=%d decayed=%d consolidated=%d total=%d\n",
+											agentID, result.Expired, result.Decayed, result.Consolidated, result.TotalMemories)
+									}
+								}
 							}
-							// Schedule next run in 24 hours
 							timer.Reset(24 * time.Hour)
 						}
 					}

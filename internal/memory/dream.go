@@ -9,6 +9,7 @@ import (
 
 // DreamResult captures what happened during a dream cycle.
 type DreamResult struct {
+	AgentID        string `json:"agent_id"`
 	StartedAt      string `json:"started_at"`
 	FinishedAt     string `json:"finished_at"`
 	Expired        int    `json:"expired"`
@@ -17,87 +18,104 @@ type DreamResult struct {
 	Reembedded     int    `json:"reembedded"`
 	Researched     int    `json:"researched"`
 	Reflections    int    `json:"reflections"`
+	Reviewed       int    `json:"reviewed"`
 	TotalMemories  int    `json:"total_memories"`
 }
 
 // Dream runs a full maintenance cycle on the memory store.
 // It consolidates, decays, prunes, re-embeds, and reflects.
 // Designed to run nightly via cron or on-demand via API.
-func (s *Store) Dream() (*DreamResult, error) {
+func (s *Store) Dream(agentID string) (*DreamResult, error) {
 	if s.llm == nil {
 		return nil, fmt.Errorf("dream requires LLM client (Ollama) — set AIPROD_OLLAMA_URL")
 	}
 
 	result := &DreamResult{
+		AgentID:   agentID,
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	fmt.Println("[dream] Starting dream cycle...")
+	fmt.Printf("[dream] Starting dream cycle for agent %s...\n", agentID)
 
-	// Phase 1: Clean up expired memories
-	expired, err := s.phaseExpire()
+	expired, err := s.phaseExpire(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: expire phase failed: %v\n", err)
 	}
 	result.Expired = expired
 
-	// Phase 2: Decay old, unused memories
-	decayed, err := s.phaseDecay()
+	decayed, err := s.phaseDecay(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: decay phase failed: %v\n", err)
 	}
 	result.Decayed = decayed
 
-	// Phase 3: Consolidate related memories per namespace
-	consolidated, err := s.phaseConsolidate()
+	consolidated, err := s.phaseConsolidate(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: consolidation phase failed: %v\n", err)
 	}
 	result.Consolidated = consolidated
 
-	// Phase 4: Re-embed memories missing embeddings
-	reembedded, err := s.phaseReembed()
+	reembedded, err := s.phaseReembed(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: re-embed phase failed: %v\n", err)
 	}
 	result.Reembedded = reembedded
 
-	// Phase 5: Quick web research to fill gaps
-	researched, err := s.phaseResearch()
+	researched, err := s.phaseResearch(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: research phase failed: %v\n", err)
 	}
 	result.Researched = researched
 
-	// Phase 6: Generate behavioral guidance
-	reflections, err := s.phaseReflect()
+	reflections, err := s.phaseReflect(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: reflection phase failed: %v\n", err)
 	}
 	result.Reflections = reflections
 
-	// Rebuild vector index after all changes
+	// Phase 7: Review today's conversations and create a daily summary
+	reviewed, err := s.phaseReview(agentID)
+	if err != nil {
+		fmt.Printf("[dream] Warning: review phase failed: %v\n", err)
+	}
+	result.Reviewed = reviewed
+
 	if s.vecIndex != nil {
 		s.rebuildVecIndex()
 	}
 
-	// Count total memories
 	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM memories").Scan(&count)
+	s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE agent_id = ?", agentID).Scan(&count)
 	result.TotalMemories = count
 
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-	fmt.Printf("[dream] Dream cycle complete: expired=%d decayed=%d consolidated=%d reembedded=%d researched=%d reflections=%d total=%d\n",
-		result.Expired, result.Decayed, result.Consolidated, result.Reembedded, result.Researched, result.Reflections, result.TotalMemories)
+	fmt.Printf("[dream] Dream cycle for %s complete: expired=%d decayed=%d consolidated=%d reembedded=%d researched=%d reflections=%d total=%d\n",
+		agentID, result.Expired, result.Decayed, result.Consolidated, result.Reembedded, result.Researched, result.Reflections, result.TotalMemories)
 
 	return result, nil
 }
 
+// DistinctAgentIDs returns all unique agent IDs that have memories.
+func (s *Store) DistinctAgentIDs() ([]string, error) {
+	rows, err := s.db.Query("SELECT DISTINCT agent_id FROM memories WHERE agent_id != ''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // --- Phase 1: Expire ---
 
-func (s *Store) phaseExpire() (int, error) {
+func (s *Store) phaseExpire(agentID string) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.db.Exec(
-		"DELETE FROM memories WHERE expires_at != '' AND expires_at <= ?", now,
+		"DELETE FROM memories WHERE agent_id = ? AND expires_at != '' AND expires_at <= ?", agentID, now,
 	)
 	if err != nil {
 		return 0, err
@@ -119,19 +137,20 @@ const (
 	pruneThreshold     = 0.05 // remove memories with importance below this
 )
 
-func (s *Store) phaseDecay() (int, error) {
+func (s *Store) phaseDecay(agentID string) (int, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -decayAgeDays).Format(time.RFC3339)
 
-	// Decay importance of stale memories
 	_, err := s.db.Exec(`
 		UPDATE memories SET
 			importance = importance * (1.0 - ?),
 			modified_at = ?
-		WHERE (last_accessed_at < ? OR last_accessed_at = '')
+		WHERE agent_id = ?
+		  AND (last_accessed_at < ? OR last_accessed_at = '')
 		  AND modified_at < ?
 		  AND importance > ?`,
 		decayRate,
 		time.Now().UTC().Format(time.RFC3339),
+		agentID,
 		cutoff, cutoff,
 		pruneThreshold,
 	)
@@ -139,9 +158,8 @@ func (s *Store) phaseDecay() (int, error) {
 		return 0, err
 	}
 
-	// Prune memories that decayed below threshold
 	res, err := s.db.Exec(
-		"DELETE FROM memories WHERE importance <= ? AND importance > 0", pruneThreshold,
+		"DELETE FROM memories WHERE agent_id = ? AND importance <= ? AND importance > 0", agentID, pruneThreshold,
 	)
 	if err != nil {
 		return 0, err
@@ -158,13 +176,13 @@ func (s *Store) phaseDecay() (int, error) {
 
 const consolidateThreshold = 10 // consolidate when namespace has more than this
 
-func (s *Store) phaseConsolidate() (int, error) {
-	// Find namespaces with many memories
+func (s *Store) phaseConsolidate(agentID string) (int, error) {
 	rows, err := s.db.Query(`
 		SELECT namespace, COUNT(*) as cnt
 		FROM memories
+		WHERE agent_id = ?
 		GROUP BY namespace
-		HAVING cnt > ?`, consolidateThreshold,
+		HAVING cnt > ?`, agentID, consolidateThreshold,
 	)
 	if err != nil {
 		return 0, err
@@ -181,7 +199,7 @@ func (s *Store) phaseConsolidate() (int, error) {
 
 	total := 0
 	for _, ns := range namespaces {
-		merged, err := s.consolidateNamespace(ns)
+		merged, err := s.consolidateNamespace(agentID, ns)
 		if err != nil {
 			fmt.Printf("[dream] Warning: consolidation of %s failed: %v\n", ns, err)
 			continue
@@ -191,9 +209,9 @@ func (s *Store) phaseConsolidate() (int, error) {
 	return total, nil
 }
 
-func (s *Store) consolidateNamespace(namespace string) (int, error) {
-	// Load all memories in this namespace
+func (s *Store) consolidateNamespace(agentID, namespace string) (int, error) {
 	memories, err := s.ListMemories(MemoryListOpts{
+		AgentID:   agentID,
 		Namespace: namespace,
 		Limit:     100,
 	})
@@ -261,7 +279,7 @@ Output ONLY the JSON lines, nothing else.`, len(memories), namespace, memDump.St
 	// Create consolidated memories
 	for _, cm := range consolidated {
 		s.CreateMemory(&Memory{
-			AgentID:   memories[0].AgentID,
+			AgentID:   agentID,
 			Namespace: namespace,
 			Key:       cm.Key,
 			Content:   cm.Content,
@@ -281,14 +299,13 @@ Output ONLY the JSON lines, nothing else.`, len(memories), namespace, memDump.St
 
 const maxResearchQueries = 5
 
-func (s *Store) phaseResearch() (int, error) {
-	// Load all memories to find researchable gaps
+func (s *Store) phaseResearch(agentID string) (int, error) {
 	rows, err := s.db.Query(`
 		SELECT namespace, key, content
 		FROM memories
-		WHERE namespace != '_system' AND namespace != 'inferred'
+		WHERE agent_id = ? AND namespace != '_system' AND namespace != 'inferred'
 		ORDER BY importance DESC
-		LIMIT 200`,
+		LIMIT 200`, agentID,
 	)
 	if err != nil {
 		return 0, err
@@ -371,6 +388,7 @@ Output ONLY JSON lines. Output nothing if no searches are needed.`, maxResearchQ
 		}
 
 		s.CreateMemory(&Memory{
+			AgentID:    agentID,
 			Namespace:  "researched",
 			Key:        task.StoreAs,
 			Content:    summary + " [from local LLM knowledge]",
@@ -383,9 +401,9 @@ Output ONLY JSON lines. Output nothing if no searches are needed.`, maxResearchQ
 	return count, nil
 }
 
-func (s *Store) phaseReembed() (int, error) {
+func (s *Store) phaseReembed(agentID string) (int, error) {
 	rows, err := s.db.Query(
-		"SELECT id, key, content FROM memories WHERE embedding = '' OR embedding IS NULL",
+		"SELECT id, key, content FROM memories WHERE agent_id = ? AND (embedding = '' OR embedding IS NULL)", agentID,
 	)
 	if err != nil {
 		return 0, err
@@ -421,14 +439,13 @@ func (s *Store) phaseReembed() (int, error) {
 // insights — without ever needing to ask the user directly. The agent
 // does its own homework.
 
-func (s *Store) phaseReflect() (int, error) {
-	// Load all memories grouped by namespace
+func (s *Store) phaseReflect(agentID string) (int, error) {
 	rows, err := s.db.Query(`
 		SELECT namespace, key, content
 		FROM memories
-		WHERE namespace != '_system'
+		WHERE agent_id = ? AND namespace != '_system'
 		ORDER BY namespace, importance DESC
-		LIMIT 200`,
+		LIMIT 200`, agentID,
 	)
 	if err != nil {
 		return 0, err
@@ -497,10 +514,11 @@ Output ONLY JSON lines, nothing else.`, dump.String())
 					ns = "inferred"
 				}
 				s.CreateMemory(&Memory{
+					AgentID:    agentID,
 					Namespace:  ns,
 					Key:        inf.Key,
 					Content:    inf.Content + fmt.Sprintf(" [inferred, confidence: %.1f]", inf.Confidence),
-					Importance: float64(inf.Confidence) * 0.6, // inferred memories start lower
+					Importance: float64(inf.Confidence) * 0.6,
 				})
 				count++
 			}
@@ -545,6 +563,7 @@ Be specific and actionable.`, dump.String())
 		fmt.Printf("[dream] Warning: guidance generation failed: %v\n", err)
 	} else {
 		s.CreateMemory(&Memory{
+			AgentID:    agentID,
 			Namespace:  "_system",
 			Key:        "dream-reflection",
 			Content:    guideResp.Response,
@@ -555,4 +574,88 @@ Be specific and actionable.`, dump.String())
 	}
 
 	return count, nil
+}
+
+// --- Phase 7: Review ---
+// Summarize today's conversations and store as a daily summary memory.
+// Deletes raw chat logs after summarization.
+
+func (s *Store) phaseReview(agentID string) (int, error) {
+	// Load chat logs from the last 24 hours
+	since := time.Now().UTC().AddDate(0, 0, -1).Format(time.RFC3339)
+	logs, err := s.ListChatLogs(agentID, since, 500)
+	if err != nil {
+		return 0, fmt.Errorf("listing chat logs: %w", err)
+	}
+	if len(logs) == 0 {
+		return 0, nil
+	}
+
+	// Group by chat_id and build a conversation dump
+	chatGroups := make(map[string][]ChatLog)
+	for _, cl := range logs {
+		chatGroups[cl.ChatID] = append(chatGroups[cl.ChatID], cl)
+	}
+
+	var dump strings.Builder
+	for chatID, msgs := range chatGroups {
+		dump.WriteString(fmt.Sprintf("\n## Conversation: %s\n", chatID))
+		for _, m := range msgs {
+			dump.WriteString(fmt.Sprintf("[%s] %s\n", m.Role, m.Content))
+		}
+	}
+
+	if s.llm == nil {
+		// Without LLM, just store the raw dump as the summary
+		s.CreateMemory(&Memory{
+			AgentID:    agentID,
+			Namespace:  "daily_summaries",
+			Key:        time.Now().UTC().Format("2006-01-02"),
+			Content:    dump.String(),
+			Importance: 0.7,
+		})
+		s.DeleteChatLogsBefore(agentID, time.Now().UTC().Format(time.RFC3339))
+		return len(chatGroups), nil
+	}
+
+	prompt := fmt.Sprintf(`Summarize today's conversations for an AI agent's daily review.
+
+For each conversation, note:
+- What the user asked for
+- Key decisions made
+- Unresolved questions or follow-ups needed
+- Any new information learned about the user
+
+Be concise but thorough. This summary will be stored as a memory for future reference.
+
+Today's conversations (%d conversations, %d messages):
+%s`, len(chatGroups), len(logs), dump.String())
+
+	resp, err := s.llm.Generate(
+		"You are summarizing an AI agent's daily conversations. Be concise and factual.",
+		prompt, 0.2, 2048,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("LLM review: %w", err)
+	}
+
+	summary := strings.TrimSpace(resp.Response)
+	if summary == "" {
+		summary = dump.String() // Fallback to raw dump
+	}
+
+	s.CreateMemory(&Memory{
+		AgentID:    agentID,
+		Namespace:  "daily_summaries",
+		Key:        time.Now().UTC().Format("2006-01-02"),
+		Content:    summary,
+		Importance: 0.7,
+	})
+
+	// Clean up processed chat logs
+	deleted, _ := s.DeleteChatLogsBefore(agentID, time.Now().UTC().Format(time.RFC3339))
+	fmt.Printf("[dream] Reviewed %d conversations (%d messages), deleted %d log entries\n",
+		len(chatGroups), len(logs), deleted)
+
+	return len(chatGroups), nil
 }

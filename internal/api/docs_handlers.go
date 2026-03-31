@@ -69,7 +69,7 @@ func (s *Server) handleDocList(store *docs.Store) http.HandlerFunc {
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		result, err := store.List(docs.ListOptions{
 			Tag:    q.Get("tag"),
-			Author: q.Get("author"),
+			Author: GetAgentID(r), // Always scope to authenticated agent
 			Cursor: q.Get("cursor"),
 			Limit:  limit,
 		})
