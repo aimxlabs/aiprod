@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,6 +96,19 @@ func newServeCmd() *cobra.Command {
 					os.Getenv("AIPROD_MAILR_AUTH_TOKEN"),
 				)
 				emailSender = mailrClient
+				// Auto-register agent email address if configured
+				if mailrAddr := os.Getenv("AIPROD_MAILR_ADDRESS"); mailrAddr != "" {
+					localPart := strings.Split(mailrAddr, "@")[0]
+					label := os.Getenv("AGENT_ID")
+					if label == "" {
+						label = localPart
+					}
+					if err := mailrClient.RegisterAddress(localPart, label); err != nil {
+						fmt.Fprintf(os.Stderr, "mailr: register %s: %v (may already exist)\n", mailrAddr, err)
+					} else {
+						fmt.Printf("  Email:    %s (registered)\n", mailrAddr)
+					}
+				}
 			} else {
 				emailClient := email.NewSMTPClient(emailStore, cfg.Domain)
 				smtpServer = email.NewSMTPServer(emailStore, cfg.Domain, cfg.SMTPAddr)
@@ -196,7 +210,7 @@ func newServeCmd() *cobra.Command {
 				srv.RegisterDocsRoutes(r, docStore)
 				srv.RegisterTablesRoutes(r, tableStore)
 				srv.RegisterTasksRoutes(r, taskStore)
-				srv.RegisterEmailRoutes(r, emailStore, emailSender)
+				srv.RegisterEmailRoutes(r, emailStore, emailSender, mailrClient)
 				srv.RegisterSearchRoutes(r, searchSvc)
 				// Cognitive layer
 				srv.RegisterMemoryRoutes(r, memoryStore)
