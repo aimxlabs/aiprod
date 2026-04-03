@@ -529,6 +529,22 @@ Output ONLY JSON lines, nothing else.`, dump.String())
 	}
 
 	// Step 2: Generate behavioral guidance that develops the agent's OWN personality
+	// Load previous reflection so the LLM can refine rather than start from scratch
+	var prevReflection string
+	s.db.QueryRow(
+		`SELECT content FROM memories WHERE agent_id = ? AND namespace = '_system' AND key = 'dream-reflection'`,
+		agentID,
+	).Scan(&prevReflection)
+
+	prevSection := ""
+	if prevReflection != "" {
+		prevSection = fmt.Sprintf(`
+Your previous guidance (refine and evolve — keep what still holds, drop what's no longer supported by evidence, add new insights):
+%s
+
+`, prevReflection)
+	}
+
 	guidePrompt := fmt.Sprintf(`You are helping an AI agent develop its own authentic personality and interaction style. Review its memory store and generate guidance.
 
 CRITICAL DISTINCTION: Knowing about the user is NOT the same as copying the user.
@@ -548,12 +564,12 @@ AGENT PERSONALITY (develop your own character):
 - The agent should have its own distinct voice and opinions
 - Suggest traits that complement the user — if the user is casual, the agent might be warm but thorough; if the user moves fast, the agent might be the one who catches edge cases
 - The agent should feel like a knowledgeable colleague, not a mirror
-
+%s
 Current memories:
 %s
 
 Output 3-5 guidance statements as a plain text list, one per line starting with "- ".
-Be specific and actionable.`, dump.String())
+Be specific and actionable.`, prevSection, dump.String())
 
 	guideResp, err := s.llm.Generate(
 		"You are helping an AI develop its own personality. The agent should NOT mirror the user. Output guidance as a plain text list.",

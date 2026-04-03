@@ -51,8 +51,13 @@ class AiprodClient:
             params["q"] = key
         return self._get("/memory", params=params)
 
-    def list_memories(self, namespace):
-        return self._get("/memory", params={"namespace": namespace})
+    def list_memories(self, namespace, importance_min=None, limit=None):
+        params = {"namespace": namespace}
+        if importance_min is not None:
+            params["importance_min"] = str(importance_min)
+        if limit is not None:
+            params["limit"] = str(limit)
+        return self._get("/memory", params=params)
 
     def scratchpad_write(self, namespace, content):
         return self._post("/scratchpad", {"key": namespace, "value": content})
