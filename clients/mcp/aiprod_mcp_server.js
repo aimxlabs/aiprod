@@ -271,6 +271,11 @@ const TOOLS = [
     },
 ];
 
+// --- Helpers ---
+function isValidEmail(addr) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr);
+}
+
 // --- Tool execution ---
 async function executeTool(name, args) {
     switch (name) {
@@ -347,6 +352,12 @@ async function executeTool(name, args) {
         }
 
         case 'send_email': {
+            const invalid = args.to.filter(a => !isValidEmail(a));
+            if (invalid.length > 0) return `Error: Invalid email address(es): ${invalid.join(', ')}. Each address must be in the format user@domain.com`;
+            if (args.cc) {
+                const invalidCc = args.cc.filter(a => !isValidEmail(a));
+                if (invalidCc.length > 0) return `Error: Invalid CC address(es): ${invalidCc.join(', ')}`;
+            }
             const msg = await post('/email/send', {
                 from: MAILR_ADDRESS,
                 to: args.to,
