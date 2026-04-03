@@ -5,12 +5,17 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/garett/aiprod/internal/email"
 	"github.com/go-chi/chi/v5"
 )
 
-func (s *Server) RegisterEmailRoutes(r chi.Router, store *email.Store, sender email.Sender) {
+func (s *Server) RegisterEmailRoutes(r chi.Router, store *email.Store, sender email.Sender, mailrClient ...*email.MailrClient) {
+	var mc *email.MailrClient
+	if len(mailrClient) > 0 {
+		mc = mailrClient[0]
+	}
 	r.Route("/email", func(r chi.Router) {
 		r.Post("/send", s.handleEmailSend(sender))
 		r.Get("/messages", s.handleEmailList(store))
@@ -19,6 +24,7 @@ func (s *Server) RegisterEmailRoutes(r chi.Router, store *email.Store, sender em
 		r.Delete("/messages/{id}", s.handleEmailDelete(store))
 		r.Get("/threads/{id}", s.handleEmailThread(store))
 		r.Get("/search", s.handleEmailSearch(store))
+		r.Post("/register", s.handleEmailRegister(mc))
 	})
 }
 
@@ -144,5 +150,44 @@ func (s *Server) handleEmailSearch(store *email.Store) http.HandlerFunc {
 			return
 		}
 		WriteJSON(w, http.StatusOK, msgs)
+	}
+}
+
+func (s *Server) handleEmailRegister(mc *email.MailrClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if mc == nil {
+			WriteError(w, http.StatusServiceUnavailable, "NO_MAILR", "mailr relay not configured")
+			return
+		}
+		var req struct {
+			Address string `json:"address"`
+			Label   string `json:"label"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
+			return
+		}
+		if req.Address == "" {
+			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "address is required")
+			return
+		}
+		localPart := req.Address
+		if idx := strings.Index(req.Address, "@"); idx > 0 {
+			localPart = req.Address[:idx]
+		}
+		label := req.Label
+		if label == "" {
+			label = localPart
+		}
+		if err := mc.RegisterAddress(localPart, label); err != nil {
+			// Duplicate is OK — treat as success
+			if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "UNIQUE") {
+				WriteJSON(w, http.StatusOK, map[string]string{"status": "already_registered", "address": req.Address})
+				return
+			}
+			WriteError(w, http.StatusInternalServerError, "REGISTER_FAILED", err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusCreated, map[string]string{"status": "registered", "address": req.Address})
 	}
 }

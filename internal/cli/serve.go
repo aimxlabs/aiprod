@@ -210,7 +210,7 @@ func newServeCmd() *cobra.Command {
 				srv.RegisterDocsRoutes(r, docStore)
 				srv.RegisterTablesRoutes(r, tableStore)
 				srv.RegisterTasksRoutes(r, taskStore)
-				srv.RegisterEmailRoutes(r, emailStore, emailSender)
+				srv.RegisterEmailRoutes(r, emailStore, emailSender, mailrClient)
 				srv.RegisterSearchRoutes(r, searchSvc)
 				// Cognitive layer
 				srv.RegisterMemoryRoutes(r, memoryStore)

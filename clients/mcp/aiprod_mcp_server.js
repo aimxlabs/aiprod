@@ -11,6 +11,7 @@ const AIPROD_URL = process.env.AIPROD_URL || 'http://agentkit-aiprod:8600';
 const AIPROD_KEY = process.env.AIPROD_API_KEY || '';
 const AGENT_ID = process.env.AGENT_ID || '';
 const SUB_AGENT_IDS = process.env.SUB_AGENT_IDS || '';
+const MAILR_ADDRESS = process.env.AIPROD_MAILR_ADDRESS || '';
 
 // --- HTTP helpers ---
 function apiRequest(method, path, body) {
@@ -236,6 +237,18 @@ const TOOLS = [
         },
     },
     {
+        name: 'register_email',
+        description: 'Register your email address with mailr. Called automatically on agent startup.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                address: { type: 'string', description: 'Full email address to register (e.g. agent@mail.example.com)' },
+                label: { type: 'string', description: 'Label for the address (optional, defaults to agent ID)' },
+            },
+            required: ['address'],
+        },
+    },
+    {
         name: 'dream',
         description: 'Run a memory maintenance cycle: consolidate related memories, decay old ones, prune low-importance entries, re-embed missing vectors, and generate a reflection. Use this when you notice your memories are getting cluttered or contradictory.',
         inputSchema: {
@@ -335,6 +348,7 @@ async function executeTool(name, args) {
 
         case 'send_email': {
             const msg = await post('/email/send', {
+                from: MAILR_ADDRESS,
                 to: args.to,
                 cc: args.cc || [],
                 subject: args.subject,
@@ -366,6 +380,7 @@ async function executeTool(name, args) {
             const subject = original.subject?.startsWith('Re: ') ? original.subject : `Re: ${original.subject || ''}`;
             const to = [original.from];
             const msg = await post('/email/send', {
+                from: MAILR_ADDRESS,
                 to,
                 cc: [],
                 subject,
@@ -373,6 +388,11 @@ async function executeTool(name, args) {
                 html: args.html || '',
             });
             return `Reply sent (id: ${msg?.id || 'unknown'}) to ${to.join(', ')}`;
+        }
+
+        case 'register_email': {
+            const result = await post('/email/register', { address: args.address, label: args.label || AGENT_ID || '' });
+            return JSON.stringify(result, null, 2);
         }
 
         case 'dream': {
