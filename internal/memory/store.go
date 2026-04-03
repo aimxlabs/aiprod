@@ -114,6 +114,12 @@ type Store struct {
 	db       *sql.DB
 	llm      *llm.Client  // optional — enables embedding generation
 	vecIndex *VecIndex     // in-memory vector index for semantic search
+	facts    FactWriter    // optional — enables knowledge extraction during dream
+}
+
+// SetKnowledge sets the knowledge store for fact extraction during dream cycles.
+func (s *Store) SetKnowledge(fw FactWriter) {
+	s.facts = fw
 }
 
 // SetLLM sets the LLM client for embedding generation and builds the vector index.

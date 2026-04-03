@@ -197,6 +197,7 @@ func newServeCmd() *cobra.Command {
 				}
 
 				memoryStore.SetLLM(llmClient)
+				memoryStore.SetKnowledge(knowledgeStore)
 			}
 
 			// Unified search

@@ -147,6 +147,19 @@ func NewStore(coreDB *sql.DB) (*Store, error) {
 	return &Store{db: coreDB}, nil
 }
 
+// CreateFactRaw is a simplified interface for callers that don't need the full Fact struct back.
+func (s *Store) CreateFactRaw(agentID, subject, predicate, object string, confidence float64) error {
+	_, err := s.CreateFact(&Fact{
+		AgentID:    agentID,
+		Subject:    subject,
+		Predicate:  predicate,
+		Object:     object,
+		Confidence: confidence,
+		SourceType: "dream",
+	})
+	return err
+}
+
 // --- Facts ---
 
 func (s *Store) CreateFact(f *Fact) (*Fact, error) {

@@ -7,19 +7,25 @@ import (
 	"time"
 )
 
+// FactWriter is satisfied by knowledge.Store — kept as an interface to avoid circular imports.
+type FactWriter interface {
+	CreateFactRaw(agentID, subject, predicate, object string, confidence float64) error
+}
+
 // DreamResult captures what happened during a dream cycle.
 type DreamResult struct {
-	AgentID        string `json:"agent_id"`
-	StartedAt      string `json:"started_at"`
-	FinishedAt     string `json:"finished_at"`
-	Expired        int    `json:"expired"`
-	Decayed        int    `json:"decayed"`
-	Consolidated   int    `json:"consolidated"`
-	Reembedded     int    `json:"reembedded"`
-	Researched     int    `json:"researched"`
-	Reflections    int    `json:"reflections"`
-	Reviewed       int    `json:"reviewed"`
-	TotalMemories  int    `json:"total_memories"`
+	AgentID          string `json:"agent_id"`
+	StartedAt        string `json:"started_at"`
+	FinishedAt       string `json:"finished_at"`
+	Expired          int    `json:"expired"`
+	Decayed          int    `json:"decayed"`
+	Consolidated     int    `json:"consolidated"`
+	Reembedded       int    `json:"reembedded"`
+	Researched       int    `json:"researched"`
+	Reflections      int    `json:"reflections"`
+	Reviewed         int    `json:"reviewed"`
+	KnowledgeExtracted int  `json:"knowledge_extracted"`
+	TotalMemories    int    `json:"total_memories"`
 }
 
 // Dream runs a full maintenance cycle on the memory store.
@@ -72,7 +78,13 @@ func (s *Store) Dream(agentID string) (*DreamResult, error) {
 	}
 	result.Reflections = reflections
 
-	// Phase 7: Review today's conversations and create a daily summary
+	extracted, err := s.phaseExtractKnowledge(agentID)
+	if err != nil {
+		fmt.Printf("[dream] Warning: knowledge extraction phase failed: %v\n", err)
+	}
+	result.KnowledgeExtracted = extracted
+
+	// Phase 8: Review today's conversations and create a daily summary
 	reviewed, err := s.phaseReview(agentID)
 	if err != nil {
 		fmt.Printf("[dream] Warning: review phase failed: %v\n", err)
@@ -88,8 +100,8 @@ func (s *Store) Dream(agentID string) (*DreamResult, error) {
 	result.TotalMemories = count
 
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-	fmt.Printf("[dream] Dream cycle for %s complete: expired=%d decayed=%d consolidated=%d reembedded=%d researched=%d reflections=%d total=%d\n",
-		agentID, result.Expired, result.Decayed, result.Consolidated, result.Reembedded, result.Researched, result.Reflections, result.TotalMemories)
+	fmt.Printf("[dream] Dream cycle for %s complete: expired=%d decayed=%d consolidated=%d reembedded=%d researched=%d reflections=%d knowledge=%d total=%d\n",
+		agentID, result.Expired, result.Decayed, result.Consolidated, result.Reembedded, result.Researched, result.Reflections, result.KnowledgeExtracted, result.TotalMemories)
 
 	return result, nil
 }
@@ -592,7 +604,106 @@ Be specific and actionable.`, prevSection, dump.String())
 	return count, nil
 }
 
-// --- Phase 7: Review ---
+// --- Phase 7b: Extract Knowledge ---
+// Scan recent memories for factual triples and store them in the knowledge graph.
+
+func (s *Store) phaseExtractKnowledge(agentID string) (int, error) {
+	if s.facts == nil {
+		return 0, nil // knowledge store not wired up — skip silently
+	}
+
+	// Use memories created or modified in the last 24 hours as the source material,
+	// excluding system/meta namespaces that are dream-generated.
+	rows, err := s.db.Query(`
+		SELECT namespace, key, content
+		FROM memories
+		WHERE agent_id = ?
+		  AND namespace NOT IN ('_system', 'inferred', 'researched', 'daily_summaries')
+		  AND modified_at >= ?
+		ORDER BY importance DESC
+		LIMIT 100`,
+		agentID, time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var dump strings.Builder
+	for rows.Next() {
+		var ns, key, content string
+		rows.Scan(&ns, &key, &content)
+		dump.WriteString(fmt.Sprintf("- [%s] %s: %s\n", ns, key, content))
+	}
+	if dump.Len() == 0 {
+		return 0, nil
+	}
+
+	prompt := fmt.Sprintf(`Extract structured knowledge facts from the following agent memories.
+Each fact should be a (subject, predicate, object) triple representing a concrete, verifiable relationship.
+
+Focus on:
+- People and their roles (e.g. "Alice", "is", "backend engineer")
+- Technologies and their usage (e.g. "project-x", "uses", "PostgreSQL")
+- Ownership and responsibility (e.g. "Bob", "owns", "payment-service")
+- Preferences and patterns (e.g. "user", "prefers", "concise answers")
+- Project relationships (e.g. "auth-service", "depends-on", "Redis")
+
+Rules:
+- Only extract facts clearly supported by the memories — do not speculate
+- Skip vague or subjective statements that can't be expressed as clean triples
+- Use lowercase, short identifiers for subjects and objects
+- Use verb phrases for predicates (e.g. "works-on", "is", "prefers", "uses", "depends-on")
+- If a fact was already likely extracted before, skip it — focus on NEW information
+
+Memories:
+%s
+
+Output one JSON object per line: {"subject": "...", "predicate": "...", "object": "...", "confidence": 0.0-1.0}
+Output ONLY JSON lines, nothing else.`, dump.String())
+
+	resp, err := s.llm.Generate(
+		"You are a knowledge extraction system. Output only JSON lines with subject/predicate/object/confidence fields.",
+		prompt, 0.1, 4096,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("knowledge extraction LLM call failed: %w", err)
+	}
+
+	type triple struct {
+		Subject    string  `json:"subject"`
+		Predicate  string  `json:"predicate"`
+		Object     string  `json:"object"`
+		Confidence float64 `json:"confidence"`
+	}
+
+	count := 0
+	for _, line := range strings.Split(resp.Response, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var t triple
+		if err := json.Unmarshal([]byte(line), &t); err != nil {
+			continue
+		}
+		if t.Subject == "" || t.Predicate == "" || t.Object == "" || t.Confidence < 0.5 {
+			continue
+		}
+		if err := s.facts.CreateFactRaw(agentID, t.Subject, t.Predicate, t.Object, t.Confidence); err != nil {
+			fmt.Printf("[dream] Warning: failed to store fact (%s %s %s): %v\n", t.Subject, t.Predicate, t.Object, err)
+			continue
+		}
+		count++
+	}
+
+	if count > 0 {
+		fmt.Printf("[dream] Extracted %d knowledge facts from recent memories\n", count)
+	}
+	return count, nil
+}
+
+// --- Phase 8: Review ---
 // Summarize today's conversations and store as a daily summary memory.
 // Deletes raw chat logs after summarization.
 
