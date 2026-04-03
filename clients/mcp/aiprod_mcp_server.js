@@ -14,7 +14,7 @@ const SUB_AGENT_IDS = process.env.SUB_AGENT_IDS || '';
 const MAILR_ADDRESS = process.env.AIPROD_MAILR_ADDRESS || '';
 
 // --- HTTP helpers ---
-function apiRequest(method, path, body) {
+function apiRequest(method, path, body, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
         const url = new URL(`${AIPROD_URL}/api/v1${path}`);
         const options = {
@@ -28,7 +28,7 @@ function apiRequest(method, path, body) {
                 ...(AGENT_ID ? { 'X-Agent-ID': AGENT_ID } : {}),
                 ...(SUB_AGENT_IDS ? { 'X-Sub-Agent-IDs': SUB_AGENT_IDS } : {}),
             },
-            timeout: 30000,
+            timeout: timeoutMs,
         };
         const req = http.request(options, (res) => {
             let data = '';
@@ -50,9 +50,9 @@ function apiRequest(method, path, body) {
         req.end();
     });
 }
-const get = (path) => apiRequest('GET', path);
-const post = (path, body) => apiRequest('POST', path, body);
-const patch = (path, body) => apiRequest('PATCH', path, body);
+const get = (path, timeoutMs) => apiRequest('GET', path, null, timeoutMs);
+const post = (path, body, timeoutMs) => apiRequest('POST', path, body, timeoutMs);
+const patch = (path, body, timeoutMs) => apiRequest('PATCH', path, body, timeoutMs);
 
 // --- Tool definitions ---
 const TOOLS = [
@@ -407,7 +407,7 @@ async function executeTool(name, args) {
         }
 
         case 'dream': {
-            const result = await post('/memory/dream', {});
+            const result = await post('/memory/dream', {}, 600000);
             return JSON.stringify(result, null, 2);
         }
 
