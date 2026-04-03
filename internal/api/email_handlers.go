@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/garett/aiprod/internal/email"
@@ -34,6 +35,9 @@ func (s *Server) handleEmailSend(sender email.Sender) http.HandlerFunc {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid JSON")
 			return
+		}
+		if req.From == "" {
+			req.From = os.Getenv("AIPROD_MAILR_ADDRESS")
 		}
 		if len(req.To) == 0 {
 			WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "to is required")

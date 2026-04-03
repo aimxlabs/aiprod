@@ -6,11 +6,13 @@ import requests
 
 
 class AiprodClient:
-    def __init__(self, base_url, api_key=None):
+    def __init__(self, base_url, api_key=None, agent_id=None):
         self.base_url = base_url.rstrip("/")
         self.headers = {}
         if api_key:
             self.headers["Authorization"] = f"Bearer {api_key}"
+        if agent_id:
+            self.headers["X-Agent-ID"] = agent_id
         self.headers["Content-Type"] = "application/json"
 
     def _url(self, path):
@@ -122,9 +124,12 @@ class AiprodClient:
 
     # --- Files ---
     def upload_file(self, filename, content, content_type="text/plain"):
+        upload_headers = {"Authorization": self.headers.get("Authorization", "")}
+        if "X-Agent-ID" in self.headers:
+            upload_headers["X-Agent-ID"] = self.headers["X-Agent-ID"]
         r = requests.post(
             self._url("/files"),
-            headers={"Authorization": self.headers.get("Authorization", "")},
+            headers=upload_headers,
             files={"file": (filename, content, content_type)},
             timeout=60,
         )

@@ -185,6 +185,57 @@ const TOOLS = [
         },
     },
     {
+        name: 'send_email',
+        description: 'Send an email from your assigned address.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                to: { type: 'array', items: { type: 'string' }, description: 'Recipient email addresses' },
+                subject: { type: 'string', description: 'Email subject' },
+                body: { type: 'string', description: 'Plain text body' },
+                cc: { type: 'array', items: { type: 'string' }, description: 'CC addresses (optional)' },
+                html: { type: 'string', description: 'HTML body (optional)' },
+            },
+            required: ['to', 'subject', 'body'],
+        },
+    },
+    {
+        name: 'list_emails',
+        description: 'List received and sent emails.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                label: { type: 'string', description: 'Filter by label: inbox, sent, trash' },
+                direction: { type: 'string', description: 'Filter: inbound or outbound' },
+                limit: { type: 'number', description: 'Max results (default 20)' },
+            },
+        },
+    },
+    {
+        name: 'get_email',
+        description: 'Get the full content of a specific email by ID.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'string', description: 'Email message ID' },
+            },
+            required: ['message_id'],
+        },
+    },
+    {
+        name: 'reply_email',
+        description: 'Reply to an email. Automatically sets the recipient, and prefixes the subject with Re:.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message_id: { type: 'string', description: 'ID of the email to reply to' },
+                body: { type: 'string', description: 'Plain text reply body' },
+                html: { type: 'string', description: 'HTML reply body (optional)' },
+            },
+            required: ['message_id', 'body'],
+        },
+    },
+    {
         name: 'dream',
         description: 'Run a memory maintenance cycle: consolidate related memories, decay old ones, prune low-importance entries, re-embed missing vectors, and generate a reflection. Use this when you notice your memories are getting cluttered or contradictory.',
         inputSchema: {
@@ -280,6 +331,48 @@ async function executeTool(name, args) {
             const tasks = await get(`/tasks${params}`);
             if (!tasks || (Array.isArray(tasks) && tasks.length === 0)) return 'No tasks found.';
             return JSON.stringify(tasks, null, 2);
+        }
+
+        case 'send_email': {
+            const msg = await post('/email/send', {
+                to: args.to,
+                cc: args.cc || [],
+                subject: args.subject,
+                body: args.body,
+                html: args.html || '',
+            });
+            return `Email sent (id: ${msg?.id || 'unknown'}) to ${args.to.join(', ')}`;
+        }
+
+        case 'list_emails': {
+            const params = new URLSearchParams();
+            if (args.label) params.set('label', args.label);
+            if (args.direction) params.set('direction', args.direction);
+            params.set('limit', String(args.limit || 20));
+            const msgs = await get(`/email/messages?${params}`);
+            if (!msgs || (Array.isArray(msgs) && msgs.length === 0)) return 'No emails found.';
+            return JSON.stringify(msgs, null, 2);
+        }
+
+        case 'get_email': {
+            const msg = await get(`/email/messages/${args.message_id}`);
+            if (!msg) return 'Email not found.';
+            return JSON.stringify(msg, null, 2);
+        }
+
+        case 'reply_email': {
+            const original = await get(`/email/messages/${args.message_id}`);
+            if (!original) return 'Original email not found.';
+            const subject = original.subject?.startsWith('Re: ') ? original.subject : `Re: ${original.subject || ''}`;
+            const to = [original.from];
+            const msg = await post('/email/send', {
+                to,
+                cc: [],
+                subject,
+                body: args.body,
+                html: args.html || '',
+            });
+            return `Reply sent (id: ${msg?.id || 'unknown'}) to ${to.join(', ')}`;
         }
 
         case 'dream': {
