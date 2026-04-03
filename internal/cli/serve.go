@@ -19,6 +19,7 @@ import (
 	"github.com/garett/aiprod/internal/knowledge"
 	"github.com/garett/aiprod/internal/llm"
 	"github.com/garett/aiprod/internal/memory"
+	"github.com/garett/aiprod/internal/notify"
 	"github.com/garett/aiprod/internal/observe"
 	"github.com/garett/aiprod/internal/planner"
 	"github.com/garett/aiprod/internal/search"
@@ -306,11 +307,17 @@ func newServeCmd() *cobra.Command {
 				}()
 			}
 
+			// Start notification check loop (every 5 minutes)
+			notifier := notify.New(coreDB)
+			notifier.Start()
+			fmt.Println("  Notify:   checking every 5m")
+
 			// Wait for interrupt
 			quit := make(chan os.Signal, 1)
 			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 			<-quit
 			fmt.Println("\nShutting down...")
+			notifier.Stop()
 			close(dreamStop)
 			webhooksStore.StopAllListeners()
 			close(mailrStop)

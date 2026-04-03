@@ -269,6 +269,29 @@ const TOOLS = [
             required: ['chat_id', 'role', 'content'],
         },
     },
+    {
+        name: 'send_notification',
+        description: 'Queue a proactive notification to be sent to the user via their configured channel (e.g. Telegram). Use this for reminders, alerts, or anything the user should know about even when they\'re not in a conversation.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                message: { type: 'string', description: 'The notification message to send' },
+            },
+            required: ['message'],
+        },
+    },
+    {
+        name: 'configure_notifications',
+        description: 'Set up the notification channel for this agent. Currently supports Telegram. The user must provide their bot token and chat ID.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                telegram_token: { type: 'string', description: 'Telegram Bot API token' },
+                telegram_chat_id: { type: 'string', description: 'Telegram chat ID to send notifications to' },
+            },
+            required: ['telegram_token', 'telegram_chat_id'],
+        },
+    },
 ];
 
 // --- Helpers ---
@@ -414,6 +437,19 @@ async function executeTool(name, args) {
         case 'log_chat': {
             await post('/memory/chat-log', { chat_id: args.chat_id, role: args.role, content: args.content });
             return 'Logged.';
+        }
+
+        case 'send_notification': {
+            // Store as a pending notification memory — the notify loop picks it up within 5 minutes
+            const key = `pending-notification-${Date.now()}`;
+            await post('/memory', { namespace: '_system', key, content: args.message, importance: 0.9 });
+            return 'Notification queued. It will be delivered within the next few minutes.';
+        }
+
+        case 'configure_notifications': {
+            await post('/memory', { namespace: '_system', key: 'notify-telegram-token', content: args.telegram_token, importance: 1.0 });
+            await post('/memory', { namespace: '_system', key: 'notify-telegram-chat-id', content: args.telegram_chat_id, importance: 1.0 });
+            return 'Telegram notifications configured. The system checks every 5 minutes for: overdue tasks, expiring reminders, and queued notifications.';
         }
 
         default:
