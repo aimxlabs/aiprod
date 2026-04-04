@@ -276,7 +276,7 @@ const TOOLS = [
             type: 'object',
             properties: {
                 message: { type: 'string', description: 'The notification message to send' },
-                deliver_at: { type: 'string', description: 'ISO 8601 timestamp for when to deliver (e.g. 2026-04-04T01:30:00Z). Omit for immediate delivery.' },
+                deliver_at: { type: 'string', description: 'MUST be an absolute ISO 8601 UTC timestamp (e.g. 2026-04-04T03:52:00Z). You must calculate this yourself from the current time — never pass relative expressions like "in 10 minutes". Omit entirely for immediate delivery.' },
             },
             required: ['message'],
         },
