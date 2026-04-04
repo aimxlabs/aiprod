@@ -45,7 +45,7 @@ func NewClient() *Client {
 	}
 	model := os.Getenv("AIPROD_OLLAMA_MODEL")
 	if model == "" {
-		model = "qwen2:7b"
+		model = "gemma4"
 	}
 	return &Client{
 		BaseURL: baseURL,
