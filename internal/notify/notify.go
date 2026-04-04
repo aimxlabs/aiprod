@@ -174,14 +174,18 @@ func (r *Runner) overdueOrDueSoon(agentID string) []string {
 	return msgs
 }
 
-// consumePendingNotifications reads and deletes _system/pending-notification-* memories.
+// consumePendingNotifications reads and deletes _system/pending-notification-* memories
+// that are ready to deliver. Notifications with expires_at in the future are skipped (scheduled).
+// Notifications with empty expires_at or expires_at <= now are delivered immediately.
 func (r *Runner) consumePendingNotifications(agentID string) []string {
+	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := r.db.Query(`
 		SELECT id, content FROM memories
 		WHERE agent_id = ? AND namespace = '_system' AND key LIKE 'pending-notification-%'
+		  AND (expires_at = '' OR expires_at IS NULL OR expires_at <= ?)
 		ORDER BY created_at ASC
 		LIMIT 20`,
-		agentID,
+		agentID, now,
 	)
 	if err != nil {
 		return nil

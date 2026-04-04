@@ -271,11 +271,12 @@ const TOOLS = [
     },
     {
         name: 'send_notification',
-        description: 'Queue a proactive notification to be sent to the user via their configured channel (e.g. Telegram). Use this for reminders, alerts, or anything the user should know about even when they\'re not in a conversation.',
+        description: 'Queue a proactive notification to be sent to the user via their configured channel (e.g. Telegram). Use this for reminders, alerts, or anything the user should know about even when they\'re not in a conversation. Set deliver_at for scheduled delivery (e.g. "remind me in 10 minutes"), or omit it to send on the next check cycle (~5 minutes).',
         inputSchema: {
             type: 'object',
             properties: {
                 message: { type: 'string', description: 'The notification message to send' },
+                deliver_at: { type: 'string', description: 'ISO 8601 timestamp for when to deliver (e.g. 2026-04-04T01:30:00Z). Omit for immediate delivery.' },
             },
             required: ['message'],
         },
@@ -440,9 +441,17 @@ async function executeTool(name, args) {
         }
 
         case 'send_notification': {
-            // Store as a pending notification memory — the notify loop picks it up within 5 minutes
+            // Store as a pending notification memory — the notify loop picks it up
+            // If deliver_at is set, store it as expires_at so the loop waits until that time
             const key = `pending-notification-${Date.now()}`;
-            await post('/memory', { namespace: '_system', key, content: args.message, importance: 0.9 });
+            const mem = { namespace: '_system', key, content: args.message, importance: 0.9 };
+            if (args.deliver_at) {
+                mem.expires_at = args.deliver_at;
+            }
+            await post('/memory', mem);
+            if (args.deliver_at) {
+                return `Notification scheduled for ${args.deliver_at}. It will be delivered within ~5 minutes of that time.`;
+            }
             return 'Notification queued. It will be delivered within the next few minutes.';
         }
 
