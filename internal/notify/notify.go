@@ -62,6 +62,7 @@ func (r *Runner) checkAll() {
 		fmt.Printf("[notify] Error listing agents: %v\n", err)
 		return
 	}
+	fmt.Printf("[notify] Checking %d agent(s)...\n", len(agentIDs))
 	for _, agentID := range agentIDs {
 		r.checkAgent(agentID)
 	}
@@ -70,7 +71,8 @@ func (r *Runner) checkAll() {
 func (r *Runner) checkAgent(agentID string) {
 	cfg := r.getNotifyConfig(agentID)
 	if cfg.telegramToken == "" || cfg.telegramChatID == "" {
-		return // no notification channel configured
+		fmt.Printf("[notify] %s: no notification channel configured, skipping\n", agentID)
+		return
 	}
 
 	var messages []string
@@ -88,6 +90,7 @@ func (r *Runner) checkAgent(agentID string) {
 	messages = append(messages, expiring...)
 
 	if len(messages) == 0 {
+		fmt.Printf("[notify] %s: nothing to notify\n", agentID)
 		return
 	}
 
